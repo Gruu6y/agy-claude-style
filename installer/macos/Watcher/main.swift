@@ -180,7 +180,13 @@ final class WatcherApp {
         return nil
     }
 
-    func runWatch(overridePort: Int?) -> Int32 {
+    private static func isProcessAlive(_ pid: Int32) -> Bool {
+        if pid <= 0 { return false }
+        if kill(pid, 0) == 0 { return true }
+        return errno == EPERM
+    }
+
+    func runWatch(overridePort: Int?, keepAlive: Bool = false, parentPid: Int32? = nil, maxIdleFailures: Int = 3) -> Int32 {
         try? FileManager.default.createDirectory(atPath: baseDir, withIntermediateDirectories: true, attributes: nil)
         let lockFd = open(lockFile, O_CREAT | O_RDWR, 0o644)
         if lockFd < 0 {
@@ -191,6 +197,7 @@ final class WatcherApp {
             return 0
         }
 
+        signal(SIGPIPE, SIG_IGN)
         let selfPid = getpid()
         try? String(selfPid).write(toFile: pidFile, atomically: true, encoding: .utf8)
         try? "".write(toFile: logFile, atomically: false, encoding: .utf8)
@@ -208,11 +215,13 @@ final class WatcherApp {
             return 1
         }
 
-        log("[*] AGY Claude Style (agy-claude-style) 守护模式启动 (PID \(selfPid))，每 2 秒检查一次窗口")
+        log("[*] AGY Claude Style (agy-claude-style) 守护模式启动 (PID \(selfPid)\(keepAlive ? ", keep-alive" : ""))，每 2 秒检查一次窗口")
 
         let stateLock = NSLock()
         var attached: [String: AttachedEntry] = [:]
         var attaching: Set<String> = []
+        var hadAttachedWindow = false
+        var consecutiveIdleFailures = 0
         var lastDirStamp = computeDirStamp()
 
         let exitSem = DispatchSemaphore(value: 0)
@@ -316,6 +325,7 @@ final class WatcherApp {
                 stateLock.lock()
                 attached[page.id] = entry
                 attaching.remove(page.id)
+                hadAttachedWindow = true
                 stateLock.unlock()
 
                 let evalVal = try applyToEntry(entry, exprSnap)
@@ -409,13 +419,21 @@ final class WatcherApp {
 
         var lastPort: Int?
         while !isExiting() {
+            if let ppid = parentPid, !Self.isProcessAlive(ppid) {
+                log("[*] 宿主父进程已退出，守护进程自动停止")
+                break
+            }
+
             // Poll fallback for in-place edits that don't fire directory vnode write events
             reloadQueue.sync {
                 performReload(nil)
             }
 
-            if let port = CdpHelper.readPort(overridePort: overridePort),
-               let pages = try? CdpHelper.listPages(port: port) {
+            var waitSeconds = 2
+            let port = CdpHelper.readPort(overridePort: overridePort)
+            let pages = port.flatMap { try? CdpHelper.listPages(port: $0) }
+
+            if let port = port, let pages = pages {
                 if lastPort != port {
                     stateLock.lock()
                     let oldEntries = Array(attached.values)
@@ -442,9 +460,40 @@ final class WatcherApp {
                     }
                 }
                 _ = group.wait(timeout: .now() + .seconds(10))
+            } else {
+                stateLock.lock()
+                let oldEntries = Array(attached.values)
+                attached.removeAll()
+                stateLock.unlock()
+                for oldEntry in oldEntries {
+                    oldEntry.session.close()
+                }
             }
 
-            _ = exitSem.wait(timeout: .now() + .seconds(2))
+            stateLock.lock()
+            let attachedEmpty = attached.isEmpty
+            if !attachedEmpty {
+                hadAttachedWindow = true
+            }
+            let hadAttached = hadAttachedWindow
+            stateLock.unlock()
+
+            let hostReachable = (pages != nil && (!pages!.isEmpty || !attachedEmpty))
+            if hostReachable {
+                consecutiveIdleFailures = 0
+            } else if hadAttached && attachedEmpty {
+                consecutiveIdleFailures += 1
+                if !keepAlive && consecutiveIdleFailures >= maxIdleFailures {
+                    log("[✓] 检测到 Antigravity 已关闭，守护进程自动退出")
+                    break
+                }
+                if keepAlive && consecutiveIdleFailures >= maxIdleFailures {
+                    lastPort = nil
+                    waitSeconds = 10
+                }
+            }
+
+            _ = exitSem.wait(timeout: .now() + .seconds(waitSeconds))
         }
 
         dirSource?.cancel()
@@ -471,6 +520,15 @@ func runWatcherMain() -> Int32 {
     var customDir: String?
     var overridePort: Int?
     var outFile: String?
+    var keepAlive = false
+    var parentPid: Int32?
+    var maxIdleFailures = 3
+
+    if let envIdle = ProcessInfo.processInfo.environment["AG_WATCH_MAX_IDLE_FAILURES"],
+       let parsed = Int(envIdle.trimmingCharacters(in: .whitespacesAndNewlines)),
+       parsed > 0 {
+        maxIdleFailures = parsed
+    }
 
     let args = CommandLine.arguments
     var i = 1
@@ -479,10 +537,19 @@ func runWatcherMain() -> Int32 {
         if a == "--watch" { mode = "watch" }
         else if a == "--once" { mode = "once" }
         else if a == "--remove" { mode = "remove" }
+        else if a == "--keep-alive" { keepAlive = true }
         else if a == "--dir" && i + 1 < args.count { i += 1; customDir = args[i] }
         else if a == "--cdp-port" && i + 1 < args.count {
             i += 1
             if let p = Int(args[i]), p > 0 { overridePort = p }
+        }
+        else if a == "--parent-pid" && i + 1 < args.count {
+            i += 1
+            if let pp = Int32(args[i]), pp > 0 { parentPid = pp }
+        }
+        else if a == "--max-idle-failures" && i + 1 < args.count {
+            i += 1
+            if let m = Int(args[i]), m > 0 { maxIdleFailures = m }
         }
         else if a == "--out" && i + 1 < args.count { i += 1; outFile = args[i] }
         i += 1
@@ -500,7 +567,7 @@ func runWatcherMain() -> Int32 {
     if mode == "remove" {
         return app.runRemove(overridePort: overridePort, outFile: outFile)
     }
-    return app.runWatch(overridePort: overridePort)
+    return app.runWatch(overridePort: overridePort, keepAlive: keepAlive, parentPid: parentPid, maxIdleFailures: maxIdleFailures)
 }
 
 exit(runWatcherMain())

@@ -1,0 +1,15 @@
+{
+  "name": "agy-claude-style",
+  "displayName": "AGY Claude Style",
+  "version": "1.0.0",
+  "description": "Claude Code / Studio 界面重塑、像素小螃蟹 Clawd 跟班、字符波纹海、三风格思考滑块、5 语言本地化与 Token HUD 遥测增强插件。",
+  "logo": "assets/logo.svg",
+  "author": "0DNANCY",
+  "homepage": "https://github.com/0DNANCY/agy-claude-style",
+  "repository": "https://github.com/0DNANCY/agy-claude-style",
+  "suggestedPrompts": [
+    "打开 AGY Claude Style 控制面板并查看当前主题状态",
+    "把界面配色切换为 Claude 暖色调并开启底部 Token HUD",
+    "检查 AGY Claude Style 注入状态并清理残留守护进程"
+  ]
+}

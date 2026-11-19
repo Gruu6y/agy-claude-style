@@ -249,7 +249,7 @@ enum InstallerCore {
         try FileManager.default.createDirectory(atPath: launchAgentsDir, withIntermediateDirectories: true, attributes: nil)
 
         let watcherExe = (installDir as NSString).appendingPathComponent(watcherExeName)
-        var args = [watcherExe, "--watch", "--dir", installDir]
+        var args = [watcherExe, "--watch", "--keep-alive", "--dir", installDir]
         if let port = cdpPort, port > 0 {
             args.append("--cdp-port")
             args.append(String(port))

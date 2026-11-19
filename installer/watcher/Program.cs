@@ -31,6 +31,19 @@ namespace AgyClaudeStyle.Watcher
             string customDir = null;
             int? overridePort = null;
             string outFile = null;
+            bool keepAlive = false;
+            int? parentPid = null;
+            int maxIdleFailures = 3;
+
+            string envIdle = Environment.GetEnvironmentVariable("AG_WATCH_MAX_IDLE_FAILURES");
+            if (!string.IsNullOrEmpty(envIdle))
+            {
+                int parsedEnvIdle;
+                if (int.TryParse(envIdle.Trim(), out parsedEnvIdle) && parsedEnvIdle > 0)
+                {
+                    maxIdleFailures = parsedEnvIdle;
+                }
+            }
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -38,11 +51,22 @@ namespace AgyClaudeStyle.Watcher
                 if (a == "--watch") mode = "watch";
                 else if (a == "--once") mode = "once";
                 else if (a == "--remove") mode = "remove";
+                else if (a == "--keep-alive") keepAlive = true;
                 else if (a == "--dir" && i + 1 < args.Length) customDir = args[++i];
                 else if (a == "--cdp-port" && i + 1 < args.Length)
                 {
                     int p;
                     if (int.TryParse(args[++i], out p) && p > 0) overridePort = p;
+                }
+                else if (a == "--parent-pid" && i + 1 < args.Length)
+                {
+                    int pp;
+                    if (int.TryParse(args[++i], out pp) && pp > 0) parentPid = pp;
+                }
+                else if (a == "--max-idle-failures" && i + 1 < args.Length)
+                {
+                    int m;
+                    if (int.TryParse(args[++i], out m) && m > 0) maxIdleFailures = m;
                 }
                 else if (a == "--out" && i + 1 < args.Length) outFile = args[++i];
             }
@@ -62,7 +86,7 @@ namespace AgyClaudeStyle.Watcher
                 {
                     return RunRemoveAsync(overridePort, outFile).GetAwaiter().GetResult();
                 }
-                return RunWatchAsync(overridePort).GetAwaiter().GetResult();
+                return RunWatchAsync(overridePort, keepAlive, parentPid, maxIdleFailures).GetAwaiter().GetResult();
             }
             catch (Exception ex)
             {
@@ -243,7 +267,22 @@ namespace AgyClaudeStyle.Watcher
             try { if (File.Exists(pidFile)) File.Delete(pidFile); } catch { }
         }
 
-        private static async Task<int> RunWatchAsync(int? overridePort)
+        private static bool IsProcessAlive(int pid)
+        {
+            try
+            {
+                using (Process p = Process.GetProcessById(pid))
+                {
+                    return !p.HasExited;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static async Task<int> RunWatchAsync(int? overridePort, bool keepAlive, int? parentPid, int maxIdleFailures)
         {
             string dirHash = GetDirHash(_baseDir);
             bool createdNew;
@@ -259,11 +298,13 @@ namespace AgyClaudeStyle.Watcher
                 try { File.WriteAllText(_logFile, "", new UTF8Encoding(false)); } catch { }
 
                 PluginManifest manifest = PluginManifest.Load(_baseDir);
-                Log(string.Format("[*] AGY Claude Style (agy-claude-style) 守护模式启动 (PID {0})，每 2 秒检查一次窗口", selfPid));
+                Log(string.Format("[*] AGY Claude Style (agy-claude-style) 守护模式启动 (PID {0}{1})，每 2 秒检查一次窗口", selfPid, keepAlive ? ", keep-alive" : ""));
 
                 string currentExpr = CdpHelper.BuildInjectExpression(_baseDir, manifest);
                 object exprLock = new object();
                 ConcurrentDictionary<string, AttachedEntry> attached = new ConcurrentDictionary<string, AttachedEntry>(StringComparer.Ordinal);
+                int hadAttached = 0;
+                int consecutiveIdleFailures = 0;
                 ManualResetEventSlim exitEvent = new ManualResetEventSlim(false);
                 EventWaitHandle stopSignal = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\AGYClaudeStyleStop_" + dirHash);
 
@@ -311,6 +352,7 @@ namespace AgyClaudeStyle.Watcher
                         entry.ScriptId = null;
                         entry.Title = CdpHelper.ShortTitle(page);
                         attached[page.Id] = entry;
+                        Interlocked.Exchange(ref hadAttached, 1);
 
                         session.OnClose = () =>
                         {
@@ -442,12 +484,19 @@ namespace AgyClaudeStyle.Watcher
                 {
                     while (!exitEvent.IsSet)
                     {
+                        if (parentPid.HasValue && !IsProcessAlive(parentPid.Value))
+                        {
+                            Log("[*] 宿主父进程已退出，守护进程自动停止");
+                            break;
+                        }
+
+                        int waitMs = 2000;
                         try
                         {
                             int? port = CdpHelper.ReadPort(overridePort);
+                            List<CdpPageInfo> pages = null;
                             if (port.HasValue)
                             {
-                                List<CdpPageInfo> pages = null;
                                 try
                                 {
                                     pages = await CdpHelper.ListPagesAsync(port.Value).ConfigureAwait(false);
@@ -456,41 +505,74 @@ namespace AgyClaudeStyle.Watcher
                                 {
                                     pages = null;
                                 }
-                                if (pages != null)
-                                {
-                                    if (!lastPort.HasValue || lastPort.Value != port.Value)
-                                    {
-                                        // Close stale sessions if Antigravity restarted on a new port
-                                        foreach (KeyValuePair<string, AttachedEntry> kv in attached)
-                                        {
-                                            AttachedEntry oldEntry;
-                                            if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
-                                            {
-                                                try { oldEntry.Session.Close(); } catch { }
-                                            }
-                                        }
-                                        Log("[+] 连接到调试端口 " + port.Value);
-                                        lastPort = port.Value;
-                                    }
+                            }
 
-                                    List<Task> tasks = new List<Task>();
-                                    for (int i = 0; i < pages.Count; i++)
+                            if (pages != null)
+                            {
+                                if (!lastPort.HasValue || lastPort.Value != port.Value)
+                                {
+                                    // Close stale sessions if Antigravity restarted on a new port
+                                    foreach (KeyValuePair<string, AttachedEntry> kv in attached)
                                     {
-                                        if (!attached.ContainsKey(pages[i].Id))
+                                        AttachedEntry oldEntry;
+                                        if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
                                         {
-                                            tasks.Add(attachAsync(pages[i]));
+                                            try { oldEntry.Session.Close(); } catch { }
                                         }
                                     }
-                                    if (tasks.Count > 0)
+                                    Log("[+] 连接到调试端口 " + port.Value);
+                                    lastPort = port.Value;
+                                }
+
+                                List<Task> tasks = new List<Task>();
+                                for (int i = 0; i < pages.Count; i++)
+                                {
+                                    if (!attached.ContainsKey(pages[i].Id))
                                     {
-                                        await Task.WhenAll(tasks).ConfigureAwait(false);
+                                        tasks.Add(attachAsync(pages[i]));
                                     }
+                                }
+                                if (tasks.Count > 0)
+                                {
+                                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                                }
+                            }
+                            else if (!attached.IsEmpty)
+                            {
+                                foreach (KeyValuePair<string, AttachedEntry> kv in attached)
+                                {
+                                    AttachedEntry oldEntry;
+                                    if (attached.TryRemove(kv.Key, out oldEntry) && oldEntry != null && oldEntry.Session != null)
+                                    {
+                                        try { oldEntry.Session.Close(); } catch { }
+                                    }
+                                }
+                            }
+
+                            bool hostReachable = (pages != null && (pages.Count > 0 || !attached.IsEmpty));
+                            if (hostReachable)
+                            {
+                                consecutiveIdleFailures = 0;
+                                if (!attached.IsEmpty) Interlocked.Exchange(ref hadAttached, 1);
+                            }
+                            else if (Volatile.Read(ref hadAttached) == 1 && attached.IsEmpty)
+                            {
+                                consecutiveIdleFailures++;
+                                if (!keepAlive && consecutiveIdleFailures >= maxIdleFailures)
+                                {
+                                    Log("[✓] 检测到 Antigravity 已关闭，守护进程自动退出");
+                                    break;
+                                }
+                                if (keepAlive && consecutiveIdleFailures >= maxIdleFailures)
+                                {
+                                    lastPort = null;
+                                    waitMs = 10000;
                                 }
                             }
                         }
                         catch { }
 
-                        exitEvent.Wait(2000);
+                        exitEvent.Wait(waitMs);
                     }
                 }
                 finally

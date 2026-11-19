@@ -132,7 +132,23 @@ Clawd 是由 [crab-assets.js](crab-assets.js) 与 [mascot-core.js](mascot-core.j
 ## 🚀 快速开始
 
 > [!TIP]
-> **开箱即用**：不想自己编译？可直接前往仓库 [Releases](https://github.com/0DNANCY/agy-claude-style/releases) 下载 GitHub Actions 自动编译发布的 `installer.exe`（Windows）或 `AGY-Claude-Style-macOS-universal.dmg`（macOS Universal，支持 Apple Silicon 与 Intel），目标机器无需安装 Node.js！
+> **开箱即用**：不想自己编译？可直接作为 **Antigravity 原生插件** 安装启用（支持 Customizations 一键开关、右侧辅助栏设置面板与宿主关闭自动清理）；或前往仓库 [Releases](https://github.com/0DNANCY/agy-claude-style/releases) 下载 `installer.exe`（Windows）或 `AGY-Claude-Style-macOS-universal.dmg`（macOS Universal，支持 Apple Silicon 与 Intel），目标机器无需安装 Node.js！
+
+### 🧩 方式零：Antigravity 原生插件模式（推荐，支持 2.0 / IDE）
+
+1. 克隆到 Antigravity 全局插件目录，或通过 CLI 安装：
+   ```powershell
+   # Windows PowerShell
+   git clone https://github.com/0DNANCY/agy-claude-style.git "$env:USERPROFILE\.gemini\config\plugins\agy-claude-style"
+   ```
+   ```bash
+   # macOS / Linux / agy CLI
+   git clone https://github.com/0DNANCY/agy-claude-style.git ~/.gemini/config/plugins/agy-claude-style
+   # 或使用 CLI: agy plugin install https://github.com/0DNANCY/agy-claude-style
+   ```
+2. 在 Antigravity **Customizations → Installed** 中启用 `agy-claude-style`：
+   - 插件通过零工具开销的 MCP 宿主（`mcp_config.json` → `plugin/mcp-host.js`，`tools/list` 为空，不消耗上下文 Token）自动托管 CDP 注入；关闭插件开关时自动无痕恢复原生界面，关闭 Antigravity 时自动检测宿主退出并清理自身进程，不留孤儿进程。
+   - 可在右侧辅助栏打开 **Claude Style**（`sidecars/studio/`）可视化调整全部 22 项外观、Clawd、思考滑块、多语言与 Token HUD 选项。
 
 ### 🪟 方式一：Windows 独立安装器（目标机器无需 Node.js）
 
@@ -251,7 +267,13 @@ agy-claude-style/
 ├── .github/workflows/         # GitHub Actions CI 测试与自动构建发布 Release 工作流
 │   ├── ci.yml                 # PR / main 分支跨平台测试与编译验证
 │   └── release.yml            # 推送 v* 标签或手动触发自动发布 Windows/macOS 安装包
-├── assets/                    # README 可爱像素螃蟹 Clawd 视觉插图资源
+├── assets/                    # 插件图标 (logo.svg) 与 README 像素螃蟹 Clawd 插图资源
+├── plugin.json                # Antigravity 原生插件清单
+├── mcp_config.json            # 零工具 MCP 生命周期宿主配置
+├── plugin/mcp-host.js         # 原生插件 MCP 保活入口（随插件/宿主自动启停）
+├── sidecars/studio/           # Antigravity 辅助栏可视化控制面板 Sidecar
+├── lifecycle.js               # 宿主存活看门狗、管道断连防护与孤儿进程防呆核心
+├── watcher-core.js            # 多窗口 CDP 热更新守护控制器
 ├── cdp.js                     # CDP WebSocket/HTTP 客户端、页面发现与注入/移除表达式构建
 ├── inject.js                  # 单次注入与 --watch 热更新守护进程（含设置持久化绑定）
 ├── remove.js                  # 停止守护进程并清理恢复原生界面

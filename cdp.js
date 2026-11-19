@@ -16,9 +16,15 @@ const APP_DATA = IS_MAC
   ? process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
   : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
 
+const STATE_DIR = process.env.AGY_CLAUDE_STYLE_STATE_DIR
+  ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
+  : __dirname;
 const PORT_FILE = path.join(APP_DATA, 'Antigravity', 'DevToolsActivePort');
-const PID_FILE = path.join(__dirname, '.watch.pid');
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const PID_FILE = path.join(STATE_DIR, '.watch.pid');
+const LOCK_FILE = path.join(STATE_DIR, '.watch.lock.json');
+const CONFIG_FILE = process.env.AGY_CLAUDE_STYLE_CONFIG
+  ? path.resolve(process.env.AGY_CLAUDE_STYLE_CONFIG)
+  : path.join(__dirname, 'config.json');
 
 const DEFAULT_CONFIG = {
   language: 'zh-CN',
@@ -54,15 +60,53 @@ function readConfig() {
   }
 }
 
-function readPort() {
-  if (process.env.AG_CDP_PORT) return parseInt(process.env.AG_CDP_PORT, 10);
-  try {
-    const text = fs.readFileSync(PORT_FILE, 'utf8');
-    const port = parseInt(text.split(/\r?\n/)[0].trim(), 10);
-    return Number.isInteger(port) && port > 0 ? port : null;
-  } catch {
-    return null;
+function resolvePortCandidates() {
+  if (IS_MAC) {
+    return [
+      PORT_FILE,
+      path.join(os.homedir(), 'Library', 'Application Support', 'Antigravity IDE', 'DevToolsActivePort'),
+    ];
   }
+  if (IS_WIN) {
+    const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
+    return Array.from(
+      new Set([
+        PORT_FILE,
+        path.join(localAppData, 'Antigravity', 'DevToolsActivePort'),
+        path.join(APP_DATA, 'Antigravity IDE', 'DevToolsActivePort'),
+        path.join(localAppData, 'Antigravity IDE', 'DevToolsActivePort'),
+      ])
+    );
+  }
+  return [
+    PORT_FILE,
+    path.join(APP_DATA, 'Antigravity IDE', 'DevToolsActivePort'),
+  ];
+}
+
+function readActivePorts() {
+  if (process.env.AG_CDP_PORT) {
+    const envPort = parseInt(process.env.AG_CDP_PORT, 10);
+    return Number.isInteger(envPort) && envPort > 0 ? [envPort] : [];
+  }
+  const ports = [];
+  const seen = new Set();
+  for (const candidate of resolvePortCandidates()) {
+    try {
+      const text = fs.readFileSync(candidate, 'utf8');
+      const port = parseInt(text.split(/\r?\n/)[0].trim(), 10);
+      if (Number.isInteger(port) && port > 0 && !seen.has(port)) {
+        seen.add(port);
+        ports.push(port);
+      }
+    } catch {}
+  }
+  return ports;
+}
+
+function readPort() {
+  const ports = readActivePorts();
+  return ports.length > 0 ? ports[0] : null;
 }
 
 async function listPages(port) {
@@ -105,24 +149,35 @@ class CdpSession {
       if (msg.error) p.reject(new Error(msg.error.message || JSON.stringify(msg.error)));
       else p.resolve(msg.result);
     });
-    ws.addEventListener('close', () => {
-      this.closed = true;
-      for (const p of this.pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new Error('CDP connection closed'));
-      }
-      this.pending.clear();
-      if (this.onClose) this.onClose();
-    });
+    ws.addEventListener('close', () => this._handleClose());
+    ws.addEventListener('error', () => this._handleClose());
+  }
+
+  _handleClose() {
+    if (this.closed) return;
+    this.closed = true;
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error('CDP connection closed'));
+    }
+    this.pending.clear();
+    if (this.onClose) {
+      try {
+        this.onClose();
+      } catch {}
+    }
   }
 
   static connect(wsUrl, timeoutMs = 3000) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl);
       const timer = setTimeout(() => {
-        ws.close();
+        try {
+          ws.close();
+        } catch {}
         reject(new Error('CDP connect timeout'));
       }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
       ws.addEventListener(
         'open',
         () => {
@@ -150,8 +205,15 @@ class CdpSession {
         this.pending.delete(id);
         reject(new Error(`CDP ${method} timeout`));
       }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
       this.pending.set(id, { resolve, reject, timer });
-      this.ws.send(JSON.stringify({ id, method, params }));
+      try {
+        this.ws.send(JSON.stringify({ id, method, params }));
+      } catch (err) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(err);
+      }
     });
   }
 
@@ -173,7 +235,11 @@ class CdpSession {
   }
 
   close() {
-    if (!this.closed) this.ws.close();
+    if (this.closed) return;
+    try {
+      this.ws.close();
+    } catch {}
+    this._handleClose();
   }
 }
 
@@ -311,8 +377,11 @@ module.exports = {
   RUNTIME_PARTS,
   PORT_FILE,
   PID_FILE,
+  LOCK_FILE,
   CONFIG_FILE,
   DEFAULT_CONFIG,
+  resolvePortCandidates,
+  readActivePorts,
   readConfig,
   readPort,
   listPages,

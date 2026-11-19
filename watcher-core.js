@@ -1,0 +1,397 @@
+// Background CDP watcher controller for AGY Claude Style (agy-claude-style).
+const fs = require('fs');
+const path = require('path');
+const {
+  PID_FILE,
+  LOCK_FILE,
+  SETTING_BINDING,
+  readActivePorts,
+  listPages,
+  CdpSession,
+  buildInjectExpression,
+  REMOVE_EXPRESSION,
+} = require('./cdp');
+const {
+  createSafeLogger,
+  createIdleHostTracker,
+  startHostWatchdog,
+  acquireWatcherLock,
+} = require('./lifecycle');
+
+const STATE_DIR = process.env.AGY_CLAUDE_STYLE_STATE_DIR
+  ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
+  : __dirname;
+const LOG_FILE = path.join(STATE_DIR, 'watch.log');
+
+function shortTitle(page) {
+  const t = (page && (page.title || page.url)) || '';
+  return t.length > 60 ? t.slice(0, 57) + '...' : t;
+}
+
+async function resolveReachableTarget() {
+  const ports = readActivePorts();
+  if (!ports.length) return { port: null, pages: null };
+  let fallbackReachable = null;
+  for (const port of ports) {
+    try {
+      const pages = await listPages(port);
+      if (pages.length > 0) {
+        return { port, pages };
+      }
+      if (!fallbackReachable) {
+        fallbackReachable = { port, pages };
+      }
+    } catch {
+      // Port is unreachable or stale; try next candidate
+    }
+  }
+  return fallbackReachable || { port: ports[0], pages: null };
+}
+
+async function startWatchController(options = {}) {
+  const {
+    mode = 'cli',
+    keepAlive = false,
+    watchHostExit = true,
+    maxIdleFailures = Number(process.env.AG_WATCH_MAX_IDLE_FAILURES) || 3,
+    tickIntervalMs = 2000,
+    backoffIntervalMs = 10000,
+    parentPid = 0,
+    watchStdin = false,
+    replaceExisting = false,
+    enableConsole = true,
+    logFile = LOG_FILE,
+    lsAddress = process.env.ANTIGRAVITY_LS_ADDRESS,
+    updateConfigSetting = null,
+    onExit = null,
+  } = options;
+
+  const resolvedStateDir = options.stateDir
+    ? path.resolve(options.stateDir)
+    : process.env.AGY_CLAUDE_STYLE_STATE_DIR
+    ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
+    : __dirname;
+  const pidFile = options.pidFile || path.join(resolvedStateDir, '.watch.pid');
+  const lockFile = options.lockFile || path.join(resolvedStateDir, '.watch.lock.json');
+  const resolvedLogFile = options.logFile !== undefined ? options.logFile : path.join(resolvedStateDir, 'watch.log');
+
+  let stopPromise = null;
+  let stopped = false;
+
+  const logger = createSafeLogger({
+    logFile: resolvedLogFile,
+    enableConsole,
+    onBrokenPipe: () => {
+      void stop({ removeFromPages: false, exitCode: 0, reason: 'broken-pipe' });
+    },
+  });
+
+  const lock = await acquireWatcherLock({
+    pidFile,
+    lockFile,
+    mode,
+    replaceExisting,
+  });
+
+  if (!lock.acquired) {
+    const err = new Error(`守护进程已在运行 (PID ${lock.existingPid})。如需重启请先运行 remove.bat`);
+    err.code = 'WATCHER_LOCKED';
+    err.existingPid = lock.existingPid;
+    logger.dispose();
+    throw err;
+  }
+
+  logger.resetLogFile();
+  logger.log(
+    `[*] AGY Claude Style (agy-claude-style) 守护模式启动 (PID ${process.pid}, mode=${mode}${keepAlive ? ', keep-alive' : ''})，每 ${Math.round(tickIntervalMs / 1000)} 秒检查一次窗口`
+  );
+
+  const attached = new Map();
+  const idleTracker = createIdleHostTracker({ maxIdleFailures, keepAlive });
+  let expr = buildInjectExpression();
+  let lastPort = null;
+  let busy = false;
+  let tickTimer = null;
+  let reloadTimer = null;
+  let fsWatcher = null;
+  let watchdog = null;
+  let detachErrorGuards = null;
+
+  function clearAttachedSessions() {
+    for (const entry of attached.values()) {
+      if (entry && entry.session) {
+        entry.session.onClose = null;
+        entry.session.close();
+      }
+    }
+    attached.clear();
+  }
+
+  async function apply(entry) {
+    if (entry.scriptId) {
+      await entry.session
+        .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
+        .catch(() => {});
+    }
+    const { identifier } = await entry.session.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: expr,
+    });
+    entry.scriptId = identifier;
+    return await entry.session.evaluate(expr);
+  }
+
+  async function attach(page) {
+    if (stopped) return;
+    attached.set(page.id, null);
+    try {
+      const session = await CdpSession.connect(page.webSocketDebuggerUrl);
+      if (stopped) {
+        session.close();
+        attached.delete(page.id);
+        return;
+      }
+      const entry = { session, scriptId: null, page };
+      attached.set(page.id, entry);
+      idleTracker.markAttached();
+
+      session.onClose = () => {
+        attached.delete(page.id);
+        if (!stopped) {
+          logger.log(`[-] 窗口已关闭: ${shortTitle(page)}`);
+        }
+      };
+
+      await session.send('Page.enable');
+      session.on('Runtime.bindingCalled', ({ name, payload }) => {
+        if (name !== SETTING_BINDING || typeof updateConfigSetting !== 'function') return;
+        try {
+          const { key, value } = JSON.parse(payload);
+          if (updateConfigSetting(key, value)) {
+            logger.log(`[⚙] 设置已保存: ${key} = ${JSON.stringify(value)}`);
+          }
+        } catch {}
+      });
+      await session.send('Runtime.enable');
+      await session.send('Runtime.addBinding', { name: SETTING_BINDING });
+      const res = await apply(entry);
+      logger.log(`[✓] 已注入 agy-claude-style: ${shortTitle(page)} (${res.status})`);
+    } catch (err) {
+      const entry = attached.get(page.id);
+      if (entry && entry.session) {
+        entry.session.onClose = null;
+        entry.session.close();
+      }
+      attached.delete(page.id);
+      if (!stopped) {
+        logger.log(`[!] 注入失败，稍后重试: ${shortTitle(page)} — ${err.message}`);
+      }
+    }
+  }
+
+  async function removeInjectedUiBestEffort() {
+    const evaluateRemove = async () => {
+      const activeEntries = Array.from(attached.values()).filter((e) => e && e.session && !e.session.closed);
+      if (activeEntries.length > 0) {
+        await Promise.allSettled(
+          activeEntries.map((entry) => entry.session.evaluate(REMOVE_EXPRESSION).catch(() => {}))
+        );
+        return;
+      }
+      const target = await resolveReachableTarget();
+      if (!target.pages || target.pages.length === 0) return;
+      await Promise.allSettled(
+        target.pages.map(async (page) => {
+          const session = await CdpSession.connect(page.webSocketDebuggerUrl, 800);
+          try {
+            await session.evaluate(REMOVE_EXPRESSION);
+          } finally {
+            session.close();
+          }
+        })
+      );
+    };
+    const timeout = new Promise((resolve) => {
+      const t = setTimeout(resolve, 1200);
+      if (typeof t.unref === 'function') t.unref();
+    });
+    await Promise.race([evaluateRemove().catch(() => {}), timeout]);
+  }
+
+  async function stop({ removeFromPages = false, exitCode = 0, reason = 'stop' } = {}) {
+    if (stopPromise) return stopPromise;
+    stopped = true;
+    stopPromise = (async () => {
+      if (tickTimer) {
+        clearTimeout(tickTimer);
+        tickTimer = null;
+      }
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+        reloadTimer = null;
+      }
+      if (fsWatcher) {
+        try {
+          fsWatcher.close();
+        } catch {}
+        fsWatcher = null;
+      }
+      if (watchdog) {
+        watchdog.stop();
+        watchdog = null;
+      }
+      if (detachErrorGuards) {
+        detachErrorGuards();
+        detachErrorGuards = null;
+      }
+      if (removeFromPages) {
+        await removeInjectedUiBestEffort();
+      }
+      clearAttachedSessions();
+      lock.release();
+      logger.dispose();
+      await new Promise((r) => setTimeout(r, 25));
+      if (typeof onExit === 'function') {
+        await onExit(exitCode, reason);
+      }
+    })();
+    return stopPromise;
+  }
+
+  async function tick() {
+    if (stopped || busy) return;
+    busy = true;
+    try {
+      const { port, pages } = await resolveReachableTarget();
+      if (stopped) return;
+
+      if (!pages) {
+        if (attached.size > 0) {
+          clearAttachedSessions();
+        }
+        idleTracker.recordTick({ reachable: false, pageCount: 0, attachedCount: attached.size });
+        if (watchHostExit && idleTracker.shouldExit()) {
+          logger.log('[✓] 检测到 Antigravity 已关闭，守护进程自动退出');
+          await stop({ removeFromPages: false, exitCode: 0, reason: 'host-closed' });
+          return;
+        }
+        if (idleTracker.shouldBackoff()) {
+          lastPort = null;
+        }
+        return;
+      }
+
+      if (port !== lastPort) {
+        if (attached.size > 0) {
+          clearAttachedSessions();
+        }
+        logger.log(`[+] 连接到调试端口 ${port}`);
+        lastPort = port;
+      }
+
+      await Promise.all(pages.filter((p) => !attached.has(p.id)).map(attach));
+
+      idleTracker.recordTick({
+        reachable: true,
+        pageCount: pages.length,
+        attachedCount: attached.size,
+      });
+
+      if (watchHostExit && idleTracker.shouldExit()) {
+        logger.log('[✓] 检测到 Antigravity 窗口全部关闭，守护进程自动退出');
+        await stop({ removeFromPages: false, exitCode: 0, reason: 'host-closed' });
+        return;
+      }
+      if (idleTracker.shouldBackoff()) {
+        lastPort = null;
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  function scheduleNextTick() {
+    if (stopped) return;
+    const delay = idleTracker.shouldBackoff() ? backoffIntervalMs : tickIntervalMs;
+    tickTimer = setTimeout(async () => {
+      tickTimer = null;
+      try {
+        await tick();
+      } catch (err) {
+        if (!stopped) logger.log(`[!] 轮询异常: ${err.message}`);
+      }
+      scheduleNextTick();
+    }, delay);
+  }
+
+  try {
+    fsWatcher = fs.watch(__dirname, (_, filename) => {
+      if (stopped || !filename) return;
+      if (filename.startsWith('.')) return;
+      if (!/\.(css|js|json)$/i.test(filename)) return;
+      if (/^(?:package|plugin|mcp_config)\.json$/i.test(filename)) return;
+      clearTimeout(reloadTimer);
+      reloadTimer = setTimeout(async () => {
+        if (stopped) return;
+        try {
+          delete require.cache[require.resolve('./cdp')];
+          const freshCdp = require('./cdp');
+          expr = freshCdp.buildInjectExpression();
+        } catch (err) {
+          logger.log(`[!] 读取文件失败: ${err.message}`);
+          return;
+        }
+        let n = 0;
+        for (const entry of attached.values()) {
+          if (!entry || stopped) continue;
+          try {
+            await apply(entry);
+            n++;
+          } catch {}
+        }
+        if (!stopped) {
+          logger.log(`[↻] ${filename} 已变更，已热更新 ${n} 个窗口`);
+        }
+      }, 180);
+      if (typeof reloadTimer.unref === 'function') reloadTimer.unref();
+    });
+    if (typeof fsWatcher.unref === 'function') fsWatcher.unref();
+  } catch {}
+
+  detachErrorGuards = logger.installProcessErrorGuards({
+    onFatalPipe: () => {
+      void stop({ removeFromPages: false, exitCode: 0, reason: 'broken-pipe' });
+    },
+  });
+
+  watchdog = startHostWatchdog({
+    lsAddress,
+    parentPid,
+    watchStdin,
+    onShutdown: (reason) => {
+      if (reason !== 'broken-pipe') {
+        logger.log(`[*] 收到退出信号 (${reason})，守护进程退出`);
+      }
+      void stop({ removeFromPages: false, exitCode: 0, reason });
+    },
+  });
+
+  await tick();
+  if (!stopped) {
+    scheduleNextTick();
+  }
+
+  return {
+    stop,
+    tick,
+    getAttachedCount: () => attached.size,
+    getLastPort: () => lastPort,
+    isStopped: () => stopped,
+  };
+}
+
+module.exports = {
+  LOG_FILE,
+  shortTitle,
+  resolveReachableTarget,
+  startWatchController,
+};

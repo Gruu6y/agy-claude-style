@@ -410,7 +410,7 @@ namespace AgyClaudeStyle.Installer
             object lnk = shellType.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
             Type lnkType = lnk.GetType();
             lnkType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { targetExe });
-            lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { "--watch" });
+            lnkType.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { "--watch --keep-alive" });
             lnkType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { installDir.TrimEnd('\\', '/') });
             lnkType.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "AGY Claude Style (agy-claude-style) watcher" });
             lnkType.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);

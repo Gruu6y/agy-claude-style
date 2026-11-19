@@ -1,5 +1,6 @@
 # Runtime PID & log files
 .watch.pid
+.watch.lock.json
 watch.log
 
 # Local user configuration (use config.example.json as template)

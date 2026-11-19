@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AGY Claude Style</title>
+  <script src="/preload.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--background, #161618);
+      --fg: var(--foreground, #ececef);
+      --muted-fg: var(--muted-foreground, #9a9aa6);
+      --card-bg: var(--card, rgba(255, 255, 255, 0.04));
+      --border-col: var(--border, rgba(255, 255, 255, 0.12));
+      --accent: #d97757;
+      --accent-soft: rgba(217, 119, 87, 0.16);
+      --ok: #3fb950;
+      --warn: #d29922;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 14px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-col);
+      margin-bottom: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-badge {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: #1b1918;
+      border: 1.5px solid var(--accent);
+      display: grid;
+      place-items: center;
+      font-size: 16px;
+      flex: 0 0 auto;
+    }
+    .brand-title {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: var(--muted-fg);
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      border: 1px solid var(--border-col);
+      background: var(--card-bg);
+      white-space: nowrap;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warn);
+    }
+    .dot.ok { background: var(--ok); }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    button {
+      appearance: none;
+      border: 1px solid var(--border-col);
+      background: var(--card-bg);
+      color: var(--fg);
+      padding: 6px 11px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 120ms ease, border-color 120ms ease;
+    }
+    button:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.primary:hover {
+      filter: brightness(1.06);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: wait;
+    }
+    .section {
+      background: var(--card-bg);
+      border: 1px solid var(--border-col);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      margin-bottom: 12px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted-fg);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 0 0 8px 0;
+    }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 0;
+      border-top: 1px solid rgba(128, 128, 128, 0.1);
+    }
+    .row:first-of-type { border-top: none; }
+    .row-label {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+    }
+    .row-name { font-weight: 500; }
+    .row-desc { font-size: 11px; color: var(--muted-fg); }
+    select {
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border-col);
+      border-radius: 7px;
+      padding: 4px 8px;
+      font-size: 12px;
+      min-width: 118px;
+    }
+    input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .toast {
+      position: sticky;
+      bottom: 8px;
+      margin-top: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      background: rgba(27, 25, 24, 0.94);
+      color: #f4f4f6;
+      border: 1px solid var(--accent);
+      font-size: 12px;
+      display: none;
+    }
+    .toast.show { display: block; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">
+      <div class="brand-badge" aria-hidden="true">🦀</div>
+      <div>
+        <div class="brand-title">AGY Claude Style</div>
+        <div class="brand-sub" id="meta-line">加载中...</div>
+      </div>
+    </div>
+    <div class="status-pill" id="status-pill">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">检测中</span>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="btn-reinject">立即注入 / 刷新</button>
+    <button id="btn-remove">无痕恢复原版</button>
+    <button id="btn-reset">恢复默认配置</button>
+    <button id="btn-refresh">刷新状态</button>
+  </div>
+
+  <div id="sections"></div>
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const GROUPS = [
+      {
+        title: '外观与首页 Studio',
+        items: [
+          { key: 'language', label: '界面语言', desc: '5 语言全局本地化（保留代码与正文）', type: 'select', options: [
+            ['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']
+          ]},
+          { key: 'palette', label: '配色方案', desc: '黑曜石蓝 / Claude 暖色 / 跟随宿主', type: 'select', options: [
+            ['obsidian', 'Obsidian'], ['claude', 'Claude'], ['host', '跟随宿主']
+          ]},
+          { key: 'homeLayout', label: '首页布局', desc: 'Studio 用量仪表盘 / 经典 / 关闭', type: 'select', options: [
+            ['studio', 'Studio'], ['classic', '经典'], ['off', '关闭']
+          ]},
+          { key: 'homeRipple', label: '字符波纹海', desc: '首页交互式二维字符水波背景', type: 'boolean' },
+          { key: 'logoInk', label: 'Logo 色调', desc: '首页顶部拱形 Logo 线条颜色', type: 'select', options: [
+            ['accent', '主题强调色'], ['foreground', '前景色']
+          ]},
+          { key: 'composerRestyle', label: '极简输入框', desc: '重排工作区胶囊与输入栏样式', type: 'boolean' },
+          { key: 'placeholderStyle', label: '占位提示风格', desc: 'Studio 提示或宿主原生提示', type: 'select', options: [
+            ['studio', 'Studio'], ['host', '宿主原生']
+          ]},
+          { key: 'smoothCaret', label: '丝滑打字光标', desc: '平滑插值光标动画（兼容 IME）', type: 'boolean' },
+          { key: 'sidebarRestyle', label: '侧栏美化', desc: '统一侧边栏行高与悬停高亮板', type: 'boolean' },
+          { key: 'sidebarCompact', label: '侧栏紧凑间距', desc: '收紧侧栏会话列表条目间距', type: 'boolean' }
+        ]
+      },
+      {
+        title: '像素小螃蟹 Clawd 与思考滑块',
+        items: [
+          { key: 'mascot', label: 'Clawd 挂件', desc: '19 套双层像素螃蟹交互动画', type: 'select', options: [
+            ['crab', '开启 Clawd'], ['off', '关闭']
+          ]},
+          { key: 'effortSliderStyle', label: '思考滑块风格', desc: '点击推理档位弹出的滑块样式', type: 'select', options: [
+            ['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']
+          ]},
+          { key: 'effortAccent', label: '蓝紫推理色阶', desc: 'Claude 模式下启用蓝紫渐变', type: 'boolean' },
+          { key: 'performanceBackdrop', label: '梁武峰人像背景', desc: '31 帧 WebP 抠像背景渲染范围', type: 'select', options: [
+            ['card', '卡片内'], ['page', '全窗口'], ['off', '关闭']
+          ]}
+        ]
+      },
+      {
+        title: 'Token HUD 与遥测显示',
+        items: [
+          { key: 'inlineStats', label: '内嵌统计与小圆环', desc: '开启右下角剩余容量圆环与浮窗', type: 'boolean' },
+          { key: 'ringMode', label: '圆环指标模式', desc: '显示上下文剩余或模型配额剩余', type: 'select', options: [
+            ['context', '上下文剩余'], ['quota', '模型配额剩余']
+          ]},
+          { key: 'turnBadges', label: '每轮 Token 徽章', desc: '在每轮回复底部展示速率与 Token 增量', type: 'boolean' },
+          { key: 'hudTopBar', label: '输入框顶部进度条', desc: '显示上下文占用顶部细条', type: 'boolean' },
+          { key: 'hudBottomBar', label: '输入框底部 HUD 栏', desc: '在底栏展开详细遥测信息', type: 'boolean' },
+          { key: 'hudRimProgress', label: '边框环绕进度条', desc: '沿输入框外框展示用量进度', type: 'boolean' },
+          { key: 'hudFooterChip', label: '底栏容量胶囊', desc: '显示剩余容量紧凑胶囊标签', type: 'boolean' },
+          { key: 'hudCompact', label: 'HUD 紧凑排版', desc: '缩小遥测栏与徽章内边距', type: 'boolean' }
+        ]
+      }
+    ];
+
+    const apiFetch = (url, opts) => {
+      if (window.sidecar && typeof window.sidecar.fetch === 'function') {
+        return window.sidecar.fetch(url, opts);
+      }
+      return fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', ...(opts && opts.headers) }
+      });
+    };
+
+    let currentConfig = {};
+    let toastTimer = null;
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+    }
+
+    function renderForm(cfg) {
+      const container = document.getElementById('sections');
+      container.innerHTML = '';
+      for (const group of GROUPS) {
+        const sec = document.createElement('div');
+        sec.className = 'section';
+        const h = document.createElement('div');
+        h.className = 'section-title';
+        h.textContent = group.title;
+        sec.appendChild(h);
+
+        for (const item of group.items) {
+          const row = document.createElement('div');
+          row.className = 'row';
+
+          const label = document.createElement('div');
+          label.className = 'row-label';
+          const name = document.createElement('div');
+          name.className = 'row-name';
+          name.textContent = item.label;
+          const desc = document.createElement('div');
+          desc.className = 'row-desc';
+          desc.textContent = item.desc;
+          label.appendChild(name);
+          label.appendChild(desc);
+          row.appendChild(label);
+
+          if (item.type === 'boolean') {
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = Boolean(cfg[item.key]);
+            cb.addEventListener('change', () => saveOne(item.key, cb.checked));
+            row.appendChild(cb);
+          } else {
+            const sel = document.createElement('select');
+            for (const [val, text] of item.options) {
+              const opt = document.createElement('option');
+              opt.value = val;
+              opt.textContent = text;
+              if (cfg[item.key] === val) opt.selected = true;
+              sel.appendChild(opt);
+            }
+            sel.addEventListener('change', () => saveOne(item.key, sel.value));
+            row.appendChild(sel);
+          }
+          sec.appendChild(row);
+        }
+        container.appendChild(sec);
+      }
+    }
+
+    async function saveOne(key, value) {
+      try {
+        const res = await apiFetch('/api/config', {
+          method: 'POST',
+          body: JSON.stringify({ key, value })
+        });
+        const data = await res.json();
+        if (data.config) currentConfig = data.config;
+        showToast(data.ok ? `已更新 ${key}（热更新生效）` : `设置 ${key} 校验失败`);
+      } catch (err) {
+        showToast('保存失败: ' + err.message);
+      }
+    }
+
+    async function refreshStatus() {
+      try {
+        const res = await apiFetch('/api/status', { method: 'GET' });
+        const st = await res.json();
+        currentConfig = st.config || {};
+        renderForm(currentConfig);
+
+        const dot = document.getElementById('status-dot');
+        const txt = document.getElementById('status-text');
+        const meta = document.getElementById('meta-line');
+        const hasCdp = st.cdp && st.cdp.port && st.cdp.pageCount > 0;
+        dot.classList.toggle('ok', Boolean(hasCdp));
+        if (hasCdp) {
+          txt.textContent = `CDP :${st.cdp.port} · ${st.cdp.pageCount} 窗口`;
+        } else {
+          txt.textContent = st.watcher?.alive ? '等待调试端口' : '未连接 CDP';
+        }
+        meta.textContent = `v${st.version || '1.0.0'} · ${st.watcher?.alive ? `守护中 (PID ${st.watcher.pid})` : '守护未运行'}`;
+      } catch (err) {
+        document.getElementById('status-text').textContent = '读取失败';
+        document.getElementById('meta-line').textContent = err.message;
+      }
+    }
+
+    async function postAction(path, label) {
+      const btns = document.querySelectorAll('.actions button');
+      btns.forEach((b) => (b.disabled = true));
+      try {
+        const res = await apiFetch(path, { method: 'POST', body: '{}' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '操作失败');
+        showToast(`${label}完成`);
+        await refreshStatus();
+      } catch (err) {
+        showToast(`${label}失败: ${err.message}`);
+      } finally {
+        btns.forEach((b) => (b.disabled = false));
+      }
+    }
+
+    document.getElementById('btn-reinject').addEventListener('click', () => postAction('/api/reinject', '注入刷新'));
+    document.getElementById('btn-remove').addEventListener('click', () => postAction('/api/remove', '恢复原版'));
+    document.getElementById('btn-reset').addEventListener('click', () => postAction('/api/reset', '重置配置'));
+    document.getElementById('btn-refresh').addEventListener('click', refreshStatus);
+
+    refreshStatus();
+  </script>
+</body>
+</html>
