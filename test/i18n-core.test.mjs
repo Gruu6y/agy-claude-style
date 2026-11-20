@@ -482,3 +482,15 @@ test('i18n-locales DICT_ROWS has zero duplicate English keys', () => {
   }
   assert.deepEqual(duplicates, []);
 });
+
+test('i18n-locales resolves AGY 2.33.1 UI additions across supported locales', () => {
+  const zhCN = i18nLocales.resolveLocaleBundle('zh-CN');
+  const zhTW = i18nLocales.resolveLocaleBundle('zh-TW');
+  const yue = i18nLocales.resolveLocaleBundle('yue');
+  const ja = i18nLocales.resolveLocaleBundle('ja');
+
+  assert.equal(zhCN.dict['Coordinators'], '协调器');
+  assert.equal(zhTW.dict['Open Appearance'], '開啟外觀設定');
+  assert.equal(yue.dict['Connect to SSH Host'], '連去 SSH 主機');
+  assert.equal(ja.dict['Add custom model'], 'カスタムモデルを追加');
+});

@@ -1974,6 +1974,28 @@
     ['Merged', '已合并', '已合併', '已合併', 'マージ済み'],
     ['No matches', '无匹配结果', '無相符結果', '冇相符結果', '一致なし'],
     ['Close find bar', '关闭查找栏', '關閉尋找列', '閂搵嘢欄', '検索バーを閉じる'],
+    // ── AGY 2.33.1 Additions (Coordinators, Plugin Themes, Custom Models, Live, Browser) ──
+    ['Coordinators', '协调器', '協調器', '協調器', 'コーディネーター'],
+    ['New coordinator', '新建协调器', '新增協調器', '開新協調器', '新しいコーディネーター'],
+    ['Themes', '主题', '主題', '主題', 'テーマ'],
+    ['Open Appearance', '打开外观设置', '開啟外觀設定', '打開外觀設定', '外観設定を開く'],
+    [
+      'Pick one of these themes under Preset in Settings > Appearance.',
+      '请在「设置 > 外观」的预设中选择以下主题之一。',
+      '請在「設定 > 外觀」的預設集中選擇以下主題之一。',
+      '請喺「設定 > 外觀」嘅預設揀返以下其中一個主題。',
+      '「設定 > 外観」のプリセットから以下のテーマのいずれかを選択してください。',
+    ],
+    ['Unnamed Theme', '未命名主题', '未命名主題', '未命名主題', '名称未設定のテーマ'],
+    ['Live', '实时', '即時', '即時', 'ライブ'],
+    ['Downloads', '下载内容', '下載項目', '下載項目', 'ダウンロード'],
+    ['Connect to SSH Host', '连接到 SSH 主机', '連線至 SSH 主機', '連去 SSH 主機', 'SSH ホストに接続'],
+    ['Open in side pane', '在侧边窗格中打开', '在側邊窗格開啟', '喺側邊窗格打開', 'サイドペインで開く'],
+    ['Reopen locally', '在本地重新打开', '在本機重新開啟', '喺本機開返', 'ローカルで再度開く'],
+    ['Add custom model', '添加自定义模型', '新增自訂模型', '加自訂模型', 'カスタムモデルを追加'],
+    ['Custom Models', '自定义模型', '自訂模型', '自訂模型', 'カスタムモデル'],
+    ['Clear browsing data', '清除浏览数据', '清除瀏覽資料', '清走瀏覽資料', '閲覧データを消去'],
+    ['Manage site data', '管理网站数据', '管理網站資料', '管理網站資料', 'サイトデータを管理'],
   );
 
   // ── Part 4: Sentences, Duration Units, Dynamic Rules & Bundle Resolver ─

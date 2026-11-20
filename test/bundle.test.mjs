@@ -831,18 +831,17 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
       closest(sel) {
         let cur = this;
         while (cur) {
-          if (sel.split(',').some((p) => matchesSimple(cur, p.trim()))) return cur;
+          if (matches(cur, sel)) return cur;
           cur = cur.parentElement;
         }
         return null;
       },
       querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
       querySelectorAll(sel) {
-        const parts = sel.split(',').map((s) => s.trim()).filter(Boolean);
         const out = [];
         const walk = (n) => {
           for (const c of n.children) {
-            if (parts.some((p) => matchesSimple(c, p))) out.push(c);
+            if (matches(c, sel)) out.push(c);
             walk(c);
           }
         };
@@ -850,6 +849,19 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
         return out;
       },
     };
+    const matches = (n, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0) return false;
+        if (!matchesSimple(n, tokens[tokens.length - 1])) return false;
+        let cur = n.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
     return node;
   };
 
@@ -1572,5 +1584,375 @@ test('Q&A takeover card, side-question panel, and running tasks clear Clawd masc
     assert.ok(injectedCss.includes('side-question-panel'));
   } finally {
     for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('AGY 2.33.1 model-selector-trigger badge ignores trailing icons/tooltips and preserves context window suffix', () => {
+  const timers = new Set();
+  const makeEl = (tag, opts = {}) => {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const listeners = new Map();
+    const children = [];
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const matchesSimple = (n, s) => {
+      let rest = s.trim();
+      const tm = /^[a-zA-Z0-9_-]+/.exec(rest);
+      if (tm) {
+        if (n.tagName !== tm[0].toUpperCase()) return false;
+        rest = rest.slice(tm[0].length);
+      }
+      while (rest) {
+        if (rest[0] === '.') {
+          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || !n.classList.contains(m[1])) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '#') {
+          const m = /^#([a-zA-Z0-9_-]+)/.exec(rest);
+          if (!m || n.id !== m[1]) return false;
+          rest = rest.slice(m[0].length);
+        } else if (rest[0] === '[') {
+          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
+          if (!m) return false;
+          const ok = m[2] === undefined ? n.hasAttribute(m[1]) : n.getAttribute(m[1]) === m[2];
+          if (!ok) return false;
+          rest = rest.slice(m[0].length);
+        } else {
+          return false;
+        }
+      }
+      return true;
+    };
+    const parseAttrs = (str) => {
+      const out = {};
+      const re = /([a-zA-Z0-9_-]+)(?:="([^"]*)")?/g;
+      let m;
+      while ((m = re.exec(str))) out[m[1]] = m[2] ?? '';
+      return out;
+    };
+    const buildChildrenFromHtml = (parent, htmlStr) => {
+      parent.children.length = 0;
+      const stack = [parent];
+      const tokRe = /<\/([a-zA-Z0-9_-]+)>|<([a-zA-Z0-9_-]+)([^>]*?)(\/?)>|([^<]+)/g;
+      let tok;
+      while ((tok = tokRe.exec(htmlStr))) {
+        if (tok[1]) {
+          if (stack.length > 1) stack.pop();
+        } else if (tok[2]) {
+          const parsed = parseAttrs(tok[3] || '');
+          const child = makeEl(tok[2], { className: parsed.class || '', attrs: parsed });
+          stack[stack.length - 1].appendChild(child);
+          if (!tok[4]) stack.push(child);
+        } else if (tok[5]) {
+          const cur = stack[stack.length - 1];
+          const txt = tok[5].replace(/\s+/g, ' ');
+          if (txt.trim()) cur._text += txt;
+        }
+      }
+    };
+    const node = {
+      tagName: tag.toUpperCase(),
+      id: attrs.get('id') || '',
+      children,
+      parentElement: null,
+      parentNode: null,
+      isConnected: true,
+      _text: opts.text || '',
+      clientWidth: 230,
+      offsetWidth: 230,
+      clientHeight: 30,
+      offsetHeight: 30,
+      style: {
+        _props: {},
+        setProperty(k, v) { this._props[k] = String(v); },
+        getPropertyValue(k) { return this._props[k] || ''; },
+        removeProperty(k) { delete this._props[k]; },
+      },
+      classList: {
+        contains: (c) => classes.has(c),
+        add: (c) => classes.add(c),
+        remove: (c) => classes.delete(c),
+        toggle: (c, f) => (f === undefined ? (classes.has(c) ? classes.delete(c) : classes.add(c)) : f ? classes.add(c) : classes.delete(c)),
+      },
+      get className() { return Array.from(classes).join(' '); },
+      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+      get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
+      set textContent(v) { children.length = 0; this._text = String(v); },
+      get innerHTML() { return this._html || ''; },
+      set innerHTML(v) { this._html = String(v); buildChildrenFromHtml(this, this._html); },
+      get childElementCount() { return children.length; },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      appendChild(ch) { ch.parentElement = this; ch.parentNode = this; children.push(ch); return ch; },
+      removeChild(ch) { const i = children.indexOf(ch); if (i >= 0) children.splice(i, 1); ch.parentElement = null; ch.parentNode = null; return ch; },
+      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') this.id = String(v); if (k === 'class') this.className = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      toggleAttribute(k, force) { const on = force === undefined ? !attrs.has(k) : Boolean(force); if (on) attrs.set(k, ''); else attrs.delete(k); return on; },
+      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
+      removeEventListener(ev, cb) { const a = listeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
+      dispatch(ev, payload = {}) { for (const fn of [...(listeners.get(ev) || [])]) fn({ stopPropagation() {}, preventDefault() {}, ...payload }); },
+      getContext() { return null; },
+      animate() { return { cancel() {}, finished: Promise.resolve() }; },
+      getBoundingClientRect() { return { left: 100, top: 500, right: 240, bottom: 524, width: 140, height: 24 }; },
+      closest(sel) {
+        let cur = this;
+        while (cur) {
+          if (matches(cur, sel)) return cur;
+          cur = cur.parentElement;
+        }
+        return null;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (n) => {
+          for (const c of n.children) {
+            if (matches(c, sel)) out.push(c);
+            walk(c);
+          }
+        };
+        walk(this);
+        return out;
+      },
+    };
+    const matches = (n, selector) =>
+      selector.split(',').some((part) => {
+        const tokens = part.trim().split(/\s+/).filter(Boolean);
+        if (tokens.length === 0) return false;
+        if (!matchesSimple(n, tokens[tokens.length - 1])) return false;
+        let cur = n.parentElement;
+        let idx = tokens.length - 2;
+        while (cur && idx >= 0) {
+          if (matchesSimple(cur, tokens[idx])) idx--;
+          cur = cur.parentElement;
+        }
+        return idx < 0;
+      });
+    return node;
+  };
+
+  const html = makeEl('html');
+  const head = makeEl('head');
+  const body = makeEl('body', { className: 'theme-dark' });
+  html.appendChild(head);
+  html.appendChild(body);
+
+  const inputBox = makeEl('div', { attrs: { 'data-testid': 'agent-input-box' } });
+  const card = makeEl('div', { className: 'surface-composer-card' });
+  const modelBtn = makeEl('button', {
+    attrs: {
+      'data-testid': 'model-selector-trigger',
+      'aria-label': 'Select model, current: Gemini 4 Neon High · 1M',
+    },
+  });
+  const labelSpan = makeEl('span', { className: 'min-w-0 overflow-hidden', text: 'Gemini 4 Neon' });
+  const effortSpan = makeEl('span', { className: 'opacity-70', text: ' High · 1M' });
+  labelSpan.appendChild(effortSpan);
+  const arrowIcon = makeEl('span', {
+    className: 'google-symbols',
+    attrs: { 'aria-hidden': 'true' },
+    text: 'keyboard_arrow_down',
+  });
+  const tooltipWrap = makeEl('div', { attrs: { role: 'tooltip' } });
+  const tooltipSpan = makeEl('span', { className: 'opacity-70', text: 'Low' });
+  tooltipWrap.appendChild(tooltipSpan);
+  modelBtn.appendChild(labelSpan);
+  modelBtn.appendChild(arrowIcon);
+  modelBtn.appendChild(tooltipWrap);
+  card.appendChild(modelBtn);
+  inputBox.appendChild(card);
+  body.appendChild(inputBox);
+
+  const doc = {
+    documentElement: html,
+    head,
+    body,
+    hidden: false,
+    readyState: 'complete',
+    title: 'Jetski Web',
+    createElement: (t) => makeEl(t),
+    getElementById: (id) => html.querySelector('#' + id),
+    querySelector: (s) => html.querySelector(s),
+    querySelectorAll: (s) => html.querySelectorAll(s),
+    addEventListener() {},
+    removeEventListener() {},
+  };
+
+  const sandbox = {
+    window: null,
+    globalThis: null,
+    document: doc,
+    navigator: { language: 'en-US' },
+    location: { protocol: 'https:', href: 'https://127.0.0.1:41234/', pathname: '/' },
+    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+    getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false }),
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+    requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 5),
+    cancelAnimationFrame: (id) => clearTimeout(id),
+    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    performance: { now: () => Date.now() },
+    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, language: 'en', effortSliderStyle: 'claude' }), sandbox);
+    assert.equal(res.status, 'ok');
+    assert.equal(effortSpan.classList.contains('ag-cs-effort-badge'), true);
+    assert.equal(effortSpan.getAttribute('data-ag-cs-effort'), 'high');
+    assert.equal(arrowIcon.classList.contains('ag-cs-effort-badge'), false);
+    assert.equal(tooltipSpan.classList.contains('ag-cs-effort-badge'), false);
+
+    sandbox.window.__agClaudeStyle.openEffortPopover(effortSpan, modelBtn);
+    const pop = body.querySelector('.ag-cs-effort-popover');
+    assert.ok(pop);
+    const track = pop.querySelector('.ag-cs-effort-track');
+    assert.ok(track);
+    assert.equal(track.getAttribute('aria-valuetext'), 'High');
+    assert.equal(track.getAttribute('aria-valuenow'), '2');
+
+    track.dispatch('keydown', { key: 'Home' });
+    assert.equal(effortSpan.getAttribute('data-ag-cs-effort'), 'low');
+    assert.equal(effortSpan.textContent, ' Low · 1M');
+    assert.equal(track.getAttribute('aria-valuetext'), 'Low');
+
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
+  } finally {
+    for (const id of timers) clearTimeout(id);
+  }
+});
+
+test('buildInjectExpression skips non-Antigravity loopback preview pages and mounts on Antigravity Hub', () => {
+  const makeStub = (tag, opts = {}) => {
+    const attrs = new Map(Object.entries(opts.attrs || {}));
+    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
+    const children = [];
+    const node = {
+      tagName: tag.toUpperCase(),
+      id: attrs.get('id') || '',
+      children,
+      parentNode: null,
+      parentElement: null,
+      style: { setProperty() {}, getPropertyValue: () => '', removeProperty() {} },
+      classList: { contains: (c) => classes.has(c), add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      appendChild(c) { c.parentNode = this; c.parentElement = this; children.push(c); return c; },
+      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); c.parentNode = null; c.parentElement = null; return c; },
+      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
+      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') this.id = String(v); },
+      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
+      hasAttribute(k) { return attrs.has(k); },
+      removeAttribute(k) { attrs.delete(k); },
+      querySelector(sel) {
+        const parts = sel.split(',').map((s) => s.trim());
+        const walk = (n) => {
+          for (const c of n.children) {
+            if (parts.some((p) => p === 'link[href="/jetbox.css"]' && c.tagName === 'LINK' && c.getAttribute('href') === '/jetbox.css')) {
+              return c;
+            }
+            const inner = walk(c);
+            if (inner) return inner;
+          }
+          return null;
+        };
+        return walk(this);
+      },
+      querySelectorAll() { return []; },
+    };
+    return node;
+  };
+
+  const makeSandbox = ({ href, protocol, title, withJetboxLink, withElectronNative }) => {
+    const html = makeStub('html');
+    const head = makeStub('head');
+    const body = makeStub('body', { className: 'theme-dark' });
+    if (withJetboxLink) {
+      head.appendChild(makeStub('link', { attrs: { rel: 'stylesheet', href: '/jetbox.css' } }));
+    }
+    html.appendChild(head);
+    html.appendChild(body);
+    const doc = {
+      documentElement: html,
+      head,
+      body,
+      title,
+      hidden: false,
+      readyState: 'complete',
+      createElement: (t) => makeStub(t),
+      getElementById: (id) => head.children.find((c) => c.id === id) || null,
+      querySelector: (s) => html.querySelector(s),
+      querySelectorAll: () => [],
+      addEventListener() {},
+      removeEventListener() {},
+    };
+    const timers = new Set();
+    const sandbox = {
+      window: null,
+      globalThis: null,
+      document: doc,
+      navigator: { language: 'zh-CN' },
+      location: { protocol, href, pathname: '/' },
+      localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
+      getComputedStyle: () => ({ getPropertyValue: () => '' }),
+      matchMedia: () => ({ matches: false }),
+      MutationObserver: class { observe() {} disconnect() {} },
+      ResizeObserver: class { observe() {} disconnect() {} },
+      requestAnimationFrame: () => 1,
+      cancelAnimationFrame: () => {},
+      setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
+      clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
+      setInterval: () => 1,
+      clearInterval: () => {},
+      performance: { now: () => Date.now() },
+      Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
+    };
+    if (withElectronNative) sandbox.electronNative = {};
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    return { sandbox, html, head, timers };
+  };
+
+  // 1. User's own localhost dev server preview inside built-in WCV browser must be skipped
+  const preview = makeSandbox({
+    protocol: 'http:',
+    href: 'http://localhost:3000/',
+    title: 'My Vite Dev App',
+    withJetboxLink: false,
+    withElectronNative: false,
+  });
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(), preview.sandbox);
+    assert.equal(res.status, 'skipped-non-host');
+    assert.equal(preview.head.children.some((c) => c.id === cdp.STYLE_ID), false);
+    assert.equal(preview.html.hasAttribute('data-ag-cs-style'), false);
+    assert.equal(preview.sandbox.window.__agClaudeStyle, undefined);
+  } finally {
+    for (const id of preview.timers) clearTimeout(id);
+  }
+
+  // 2. Real Antigravity Hub loopback page mounts normally
+  const hub = makeSandbox({
+    protocol: 'https:',
+    href: 'https://127.0.0.1:41234/',
+    title: 'Jetski Web',
+    withJetboxLink: true,
+    withElectronNative: true,
+  });
+  try {
+    const res = vm.runInNewContext(cdp.buildInjectExpression(), hub.sandbox);
+    assert.equal(res.status, 'ok');
+    assert.equal(hub.head.children.some((c) => c.id === cdp.STYLE_ID), true);
+    assert.equal(hub.html.getAttribute('data-ag-cs-style'), '1');
+    vm.runInNewContext(cdp.REMOVE_EXPRESSION, hub.sandbox);
+    assert.equal(hub.sandbox.window.__agClaudeStyle, undefined);
+  } finally {
+    for (const id of hub.timers) clearTimeout(id);
   }
 });

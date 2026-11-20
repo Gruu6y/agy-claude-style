@@ -201,18 +201,26 @@
     if (orch) return 'Orchestrator (' + titleCaseSlugWord(orch[1] || 'carbon') + ')';
 
     const gem = s.match(
-      /^gemini-([0-9]+(?:\.[0-9]+)?)-([a-z]+)(?:-(low|medium|high|xhigh|max|extra))?(?:-(?:trial|tiered|n|preview|exp|experimental|internal|prod|v\d+))*$/i
+      /^gemini-([0-9]+(?:\.[0-9]+)?)-([a-z]+(?:-(?:lite|mini|ultra|nano|tts))?)(?:-(low|medium|high|xhigh|max|extra))?(?:-(?:trial|tiered|n|preview|exp|experimental|internal|prod|maas|v\d+))*$/i
     );
     if (gem) {
-      return 'Gemini ' + gem[1] + ' ' + titleCaseSlugWord(gem[2]) + (gem[3] ? ' (' + formatSlugTier(gem[3]) + ')' : '');
+      const fam = gem[2]
+        .split('-')
+        .map((w) => (w.toLowerCase() === 'tts' ? 'TTS' : titleCaseSlugWord(w)))
+        .join(' ');
+      return 'Gemini ' + gem[1] + ' ' + fam + (gem[3] ? ' (' + formatSlugTier(gem[3]) + ')' : '');
     }
 
-    const claude = s.match(/^claude-(opus|sonnet|haiku)-(\d+)[-.](\d+)(?:-(low|medium|high|xhigh|max|thinking))?$/i);
+    const claude = s.match(
+      /^claude-(opus|sonnet|haiku)-(\d+)[-.](\d+)(?:-(low|medium|high|xhigh|max|thinking))?(?:-(?:thinking|preview|internal|prod|v\d+))*$/i
+    );
     if (claude) {
       return 'Claude ' + titleCaseSlugWord(claude[1]) + ' ' + claude[2] + '.' + claude[3] + (claude[4] ? ' (' + formatSlugTier(claude[4]) + ')' : '');
     }
 
-    const gpt = s.match(/^gpt-oss-(\d+[a-z]?)(?:-(low|medium|high))?$/i);
+    const gpt = s.match(
+      /^gpt-oss-(\d+[a-z]?)(?:-(low|medium|high|xhigh|max))?(?:-(?:maas|preview|exp|experimental|internal|prod|v\d+))*$/i
+    );
     if (gpt) {
       return 'GPT-OSS ' + gpt[1].toUpperCase() + (gpt[2] ? ' (' + formatSlugTier(gpt[2]) + ')' : '');
     }

@@ -23,7 +23,7 @@ function isLocalHostRequest(req) {
     return false;
   }
   const origin = String(req.headers.origin || '').trim().toLowerCase();
-  if (origin && /^vscode-webview:\/\/[a-z0-9._-]+$/.test(origin)) {
+  if (origin && /^(?:vscode-webview|plugin):\/\/[a-z0-9._-]+$/.test(origin)) {
     return true;
   }
   const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
