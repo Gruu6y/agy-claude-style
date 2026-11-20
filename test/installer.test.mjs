@@ -342,7 +342,7 @@ test(
     assert.equal(csHash, nodeHash);
     const expectedCfgObj = JSON.parse(expectedCfg);
     assert.ok(injectedExpr.includes(`"palette":"${expectedCfgObj.palette}"`));
-    assert.ok(injectedExpr.includes(`"ringMode":"${expectedCfgObj.ringMode}"`));
+    assert.ok(injectedExpr.includes(`"effortSliderStyle":"${expectedCfgObj.effortSliderStyle}"`));
 
     // Verify watcher --once CLI mode works standalone against CDP
     const watcherExe = path.join(installDir, 'agy-claude-style-watcher.exe');

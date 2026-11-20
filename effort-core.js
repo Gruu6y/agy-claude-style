@@ -473,7 +473,11 @@
     const raw = String(baseName || '').trim();
     if (/flash/i.test(raw)) return 'Flash';
     if (/hydrogen/i.test(raw)) return 'Hydrogen';
+    if (/neon/i.test(raw)) return 'Neon';
+    if (/carbon/i.test(raw)) return 'Carbon';
     if (/argon/i.test(raw)) return 'Argon';
+    if (/helix/i.test(raw)) return 'Helix';
+    if (/orchestrator/i.test(raw)) return 'Orch';
     if (/opus/i.test(raw)) return 'Opus';
     if (/sonnet/i.test(raw)) return 'Sonnet';
     if (/\bpro\b/i.test(raw)) return 'Pro';
@@ -537,6 +541,8 @@
 
     const flashFam = findFamily(/\bflash\b/i);
     const argonFam = findFamily(/\bargon\b/i);
+    const neonFam = findFamily(/\bneon\b/i);
+    const carbonFam = findFamily(/\bcarbon\b/i);
     const hydroFam = findFamily(/\bhydrogen\b/i);
     const sonnetFam = findFamily(/\bsonnet\b/i);
     const opusFam = findFamily(/\bopus\b/i);
@@ -560,8 +566,23 @@
         pickOption(argonFam, ['medium', 'high']),
         pickOption(argonFam, ['high', 'xhigh', 'max']),
       ].filter(Boolean);
-    } else if (flashFam && (hydroFam || argonFam)) {
-      const proFam = hydroFam || argonFam;
+    } else if (/carbon/i.test(curParsed.base) && flashFam && carbonFam) {
+      chosen = [
+        pickOption(flashFam, ['low', 'medium']),
+        pickOption(flashFam, ['medium', 'high']),
+        pickOption(flashFam, ['high', 'xhigh']),
+        pickOption(carbonFam, ['low', 'medium']),
+        pickOption(carbonFam, ['medium', 'high']),
+        pickOption(carbonFam, ['high', 'xhigh', 'max']),
+      ].filter(Boolean);
+    } else if (flashFam && (hydroFam || neonFam || carbonFam || argonFam)) {
+      const proFam =
+        (/neon/i.test(curParsed.base) && neonFam) ||
+        (/carbon/i.test(curParsed.base) && carbonFam) ||
+        hydroFam ||
+        neonFam ||
+        carbonFam ||
+        argonFam;
       const proMidChoice =
         curParsed.base.toLowerCase() === proFam.base.toLowerCase() && curEffort === 'medium'
           ? ['medium', 'low']

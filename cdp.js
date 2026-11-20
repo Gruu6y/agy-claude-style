@@ -16,15 +16,83 @@ const APP_DATA = IS_MAC
   ? process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
   : process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
 
-const STATE_DIR = process.env.AGY_CLAUDE_STYLE_STATE_DIR
+const STATE_DIR_ENV = process.env.AGY_CLAUDE_STYLE_STATE_DIR
   ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
-  : __dirname;
+  : '';
+const CONFIG_FILE_ENV = process.env.AGY_CLAUDE_STYLE_CONFIG
+  ? path.resolve(process.env.AGY_CLAUDE_STYLE_CONFIG)
+  : '';
+
+function resolvePluginDataDir(env = process.env) {
+  const pluginData = String(env?.AGY_CLAUDE_STYLE_PLUGIN_DATA || '').trim();
+  if (pluginData && !pluginData.includes('${')) {
+    return path.resolve(pluginData);
+  }
+  const sidecarData = String(env?.ANTIGRAVITY_EXECUTABLE_DATA_DIR || '').trim();
+  const lsAddr = String(env?.ANTIGRAVITY_LS_ADDRESS || '').trim();
+  if (sidecarData && lsAddr !== 'test.invalid') {
+    const resolvedSidecar = path.resolve(sidecarData);
+    let cur = resolvedSidecar;
+    let prevChild = '';
+    for (let depth = 0; depth < 8 && cur && path.dirname(cur) !== cur; depth += 1) {
+      const base = path.basename(cur);
+      const isSidecarData = process.platform === 'win32'
+        ? base.toLowerCase() === 'sidecar_data'
+        : base === 'sidecar_data';
+      if (isSidecarData && prevChild) {
+        return path.join(path.dirname(cur), 'plugin_data', prevChild);
+      }
+      prevChild = base;
+      cur = path.dirname(cur);
+    }
+    return resolvedSidecar;
+  }
+  return null;
+}
+
+const PLUGIN_DATA_DIR = resolvePluginDataDir(process.env);
 const PORT_FILE = path.join(APP_DATA, 'Antigravity', 'DevToolsActivePort');
+const STATE_DIR = STATE_DIR_ENV || PLUGIN_DATA_DIR || __dirname;
 const PID_FILE = path.join(STATE_DIR, '.watch.pid');
 const LOCK_FILE = path.join(STATE_DIR, '.watch.lock.json');
-const CONFIG_FILE = process.env.AGY_CLAUDE_STYLE_CONFIG
-  ? path.resolve(process.env.AGY_CLAUDE_STYLE_CONFIG)
-  : path.join(__dirname, 'config.json');
+const LEGACY_CONFIG_FILE = path.join(__dirname, 'config.json');
+const CONFIG_FILE =
+  CONFIG_FILE_ENV ||
+  (PLUGIN_DATA_DIR ? path.join(PLUGIN_DATA_DIR, 'config.json') : LEGACY_CONFIG_FILE);
+
+function atomicWriteFileSync(filePath, content) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(tmpPath, content, 'utf8');
+    fs.renameSync(tmpPath, filePath);
+  } catch {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {}
+    fs.writeFileSync(filePath, content, 'utf8');
+  }
+}
+
+function ensureMigratedPluginConfig({
+  pluginDataDir = PLUGIN_DATA_DIR,
+  configFile = CONFIG_FILE,
+  legacyConfigFile = LEGACY_CONFIG_FILE,
+  explicitConfig = Boolean(CONFIG_FILE_ENV),
+} = {}) {
+  if (!pluginDataDir || explicitConfig) return false;
+  if (path.resolve(configFile) === path.resolve(legacyConfigFile)) return false;
+  try {
+    if (fs.existsSync(configFile) || !fs.existsSync(legacyConfigFile)) return false;
+    const raw = fs.readFileSync(legacyConfigFile, 'utf8');
+    const sanitized = sanitizeConfig(JSON.parse(raw));
+    atomicWriteFileSync(configFile, JSON.stringify(sanitized, null, 2) + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const DEFAULT_CONFIG = {
   language: 'zh-CN',
@@ -34,14 +102,6 @@ const DEFAULT_CONFIG = {
   composerRestyle: true,
   mascot: 'crab',
   logoInk: 'accent',
-  inlineStats: true,
-  ringMode: 'context',
-  turnBadges: true,
-  hudTopBar: false,
-  hudBottomBar: false,
-  hudRimProgress: false,
-  hudFooterChip: false,
-  hudCompact: false,
   effortSliderStyle: 'claude',
   effortAccent: true,
   performanceBackdrop: 'card',
@@ -52,9 +112,21 @@ const DEFAULT_CONFIG = {
   pollIntervalMs: 2500,
 };
 
+function sanitizeConfig(raw) {
+  const out = { ...DEFAULT_CONFIG };
+  if (!raw || typeof raw !== 'object') return out;
+  for (const key of Object.keys(DEFAULT_CONFIG)) {
+    if (Object.prototype.hasOwnProperty.call(raw, key) && raw[key] !== undefined) {
+      out[key] = raw[key];
+    }
+  }
+  return out;
+}
+
 function readConfig() {
+  ensureMigratedPluginConfig();
   try {
-    return { ...DEFAULT_CONFIG, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) };
+    return sanitizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
   } catch {
     return { ...DEFAULT_CONFIG };
   }
@@ -109,18 +181,55 @@ function readPort() {
   return ports.length > 0 ? ports[0] : null;
 }
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+const SIDECAR_TITLE_RE = /^(?:AGY Claude Style(?:\s+Studio)?|(?:Antigravity\s+)?Usage\s+Monitor|Swarm\s+Board)\b/i;
+
+function isLoopbackHttpUrl(rawUrl) {
+  try {
+    const parsed = new URL(String(rawUrl || '').trim());
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isIdeExtensionChatTarget(t) {
+  if (!t || typeof t !== 'object' || !t.webSocketDebuggerUrl) return false;
+  const type = String(t.type || '').trim().toLowerCase();
+  if (type !== 'iframe' && type !== 'webview' && type !== 'page') return false;
+  const url = String(t.url || '').trim();
+  if (!isLoopbackHttpUrl(url)) return false;
+  return (
+    /[?&]extension(?:View|Variant)=/i.test(url) ||
+    /\/c\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:[/?#]|$)/i.test(url)
+  );
+}
+
+function isAntigravityPageTarget(t) {
+  if (!t || typeof t !== 'object' || !t.webSocketDebuggerUrl) return false;
+  const type = String(t.type || '').trim().toLowerCase();
+  const url = String(t.url || '').trim();
+  const title = String(t.title || '').trim();
+  if (!url) return false;
+  if (/^(?:devtools|chrome|chrome-extension|data|about|vscode-webview):/i.test(url)) return false;
+  if (SIDECAR_TITLE_RE.test(title) || /\/sidecars?\//i.test(url)) return false;
+  if (/sharedProcess\.html/i.test(url)) return false;
+  if (type !== 'page') {
+    return isIdeExtensionChatTarget(t);
+  }
+  if (/^https?:/i.test(url)) {
+    return isLoopbackHttpUrl(url);
+  }
+  return /^(?:file|vscode-file):\/\//i.test(url);
+}
+
 async function listPages(port) {
   const res = await fetch(`http://127.0.0.1:${port}/json/list`, {
     signal: AbortSignal.timeout(2000),
   });
   const targets = await res.json();
-  return targets.filter(
-    (t) =>
-      t.type === 'page' &&
-      t.webSocketDebuggerUrl &&
-      !t.url.startsWith('devtools://') &&
-      !t.url.startsWith('data:')
-  );
+  return targets.filter((t) => isAntigravityPageTarget(t));
 }
 
 class CdpSession {
@@ -359,6 +468,7 @@ const REMOVE_EXPRESSION = `(() => {
   if (root) {
     root.removeAttribute('data-ag-cs-effort-accent');
     root.removeAttribute('data-ag-cs-perf-backdrop');
+    root.removeAttribute('data-ag-cs-hud-compact');
     root.removeAttribute('data-ag-cs-lang');
     root.removeAttribute('data-ag-cs-cjk');
     if (root.getAttribute('data-ag-cjk') === '1') root.removeAttribute('data-ag-cjk');
@@ -375,11 +485,20 @@ module.exports = {
   PLUGIN_VERSION,
   SETTING_BINDING,
   RUNTIME_PARTS,
+  STATE_DIR,
+  PLUGIN_DATA_DIR,
+  LEGACY_CONFIG_FILE,
   PORT_FILE,
   PID_FILE,
   LOCK_FILE,
   CONFIG_FILE,
   DEFAULT_CONFIG,
+  resolvePluginDataDir,
+  atomicWriteFileSync,
+  ensureMigratedPluginConfig,
+  sanitizeConfig,
+  isIdeExtensionChatTarget,
+  isAntigravityPageTarget,
   resolvePortCandidates,
   readActivePorts,
   readConfig,

@@ -177,6 +177,50 @@ test('resolvePerformancePresets pairs Flash+Argon, Flash+Hydrogen, Claude Sonnet
   // Fallback with empty options
   const fb = effortCore.resolvePerformancePresets([], '', '', true);
   assert.equal(fb.presets.length, 6);
+
+  // AGY 2.33.0 Gemini 4 Neon / Carbon / Helix / Orchestrator model badge & presets
+  const agy233Opts = [
+    { label: 'Gemini 3.8 Flash Low' },
+    { label: 'Gemini 3.8 Flash Medium' },
+    { label: 'Gemini 3.8 Flash High' },
+    { label: 'Gemini 4 Carbon Low' },
+    { label: 'Gemini 4 Carbon Medium' },
+    { label: 'Gemini 4 Carbon High' },
+    { label: 'Gemini 4 Neon Low' },
+    { label: 'Gemini 4 Neon Medium' },
+    { label: 'Gemini 4 Neon High' },
+    { label: 'Gemini 4 Neon XHigh' },
+  ];
+  const carbon = effortCore.resolvePerformancePresets(agy233Opts, 'Gemini 4 Carbon (High)', 'high', true);
+  assert.equal(carbon.presets.length, 6);
+  assert.equal(carbon.presets[0].modelShort, 'Flash');
+  assert.equal(carbon.presets[5].modelShort, 'Carbon');
+  assert.equal(carbon.presets[5].fullLabel, 'Gemini 4 Carbon High');
+  assert.equal(carbon.activeIdx, 5);
+
+  const neon = effortCore.resolvePerformancePresets(agy233Opts, 'Gemini 4 Neon (XHigh)', 'xhigh', true);
+  assert.equal(neon.presets.length, 6);
+  assert.equal(neon.presets[0].modelShort, 'Flash');
+  assert.equal(neon.presets[5].modelShort, 'Neon');
+  assert.equal(neon.presets[5].fullLabel, 'Gemini 4 Neon XHigh');
+  assert.equal(neon.activeIdx, 5);
+
+  const helixFb = effortCore.resolvePerformancePresets(
+    [{ label: 'Gemini 4 Helix Low' }, { label: 'Gemini 4 Helix High' }],
+    'Gemini 4 Helix High',
+    'high',
+    false
+  );
+  assert.equal(helixFb.presets[0].modelShort, 'Helix');
+
+  const orchFb = effortCore.resolvePerformancePresets(
+    [{ label: 'Orchestrator (Neon)' }],
+    'Orchestrator (Neon)',
+    '',
+    false
+  );
+  assert.equal(orchFb.presets.length, 6);
+  assert.equal(effortCore.parseModelLabelEffort('Orchestrator (Neon)').effort, '');
 });
 
 test('frameForLevel, levelForFrame, interpolatePerfColor, and perf-assets 31 WebP frames stay consistent', () => {

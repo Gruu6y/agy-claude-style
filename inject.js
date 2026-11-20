@@ -3,11 +3,13 @@
 //   node inject.js           one-shot: inject now and exit
 //   node inject.js --watch   daemon mode: auto-inject into new/reloaded windows
 //                            and hot-reload style.css / *.js / config.json
-const fs = require('fs');
 const {
   PORT_FILE,
   CONFIG_FILE,
   readConfig,
+  sanitizeConfig,
+  atomicWriteFileSync,
+  ensureMigratedPluginConfig,
   readActivePorts,
   listPages,
   CdpSession,
@@ -46,14 +48,6 @@ const validators = {
   composerRestyle: (v) => typeof v === 'boolean',
   mascot: (v) => v === 'crab' || v === 'off',
   logoInk: (v) => v === 'accent' || v === 'foreground',
-  inlineStats: (v) => typeof v === 'boolean',
-  ringMode: (v) => v === 'context' || v === 'quota',
-  turnBadges: (v) => typeof v === 'boolean',
-  hudTopBar: (v) => typeof v === 'boolean',
-  hudBottomBar: (v) => typeof v === 'boolean',
-  hudRimProgress: (v) => typeof v === 'boolean',
-  hudFooterChip: (v) => typeof v === 'boolean',
-  hudCompact: (v) => typeof v === 'boolean',
   effortSliderStyle: (v) => v === 'claude' || v === 'chatgpt' || v === 'liangwufeng',
   effortAccent: (v) => typeof v === 'boolean',
   performanceBackdrop: (v) => v === 'off' || v === 'card' || v === 'page',
@@ -65,8 +59,9 @@ const validators = {
 
 function updateConfigSetting(key, value) {
   if (!Object.prototype.hasOwnProperty.call(validators, key) || !validators[key](value)) return false;
-  const next = { ...readConfig(), [key]: value };
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n');
+  ensureMigratedPluginConfig();
+  const next = sanitizeConfig({ ...readConfig(), [key]: value });
+  atomicWriteFileSync(CONFIG_FILE, JSON.stringify(next, null, 2) + '\n');
   return true;
 }
 

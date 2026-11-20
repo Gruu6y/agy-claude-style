@@ -64,7 +64,7 @@ test('analyzeTrajectoryForUsage extracts calls, days, hours, models, and retryIn
   assert.equal(rec.days['2026-11-10'].hours[14], 1);
   assert.equal(rec.days['2026-11-11'].total, 11500);
   assert.equal(rec.days['2026-11-11'].hours[9], 1);
-  assert.equal(rec.days['2026-11-11'].models['claude-opus-5.5'].total, 11500);
+  assert.equal(rec.days['2026-11-11'].models['Claude Opus 5.5'].total, 11500);
 });
 
 test('aggregateUsageRollup excludes subagents from sessions, filters ranges, and picks book yardstick', () => {
@@ -162,258 +162,143 @@ test('homeChartTicks never produce overlapping labels', () => {
   }
 });
 
-test('analyzeActiveConversation handles empty and populated trajectories', () => {
-  const empty = usageCore.analyzeActiveConversation(null);
-  assert.equal(empty.calls, 0);
-  assert.equal(empty.contextUsed, 0);
-  assert.equal(empty.isRunning, false);
+test('inspectTrajectoryActivity detects idle, typing, thinking, and recent errors cleanly', () => {
+  assert.deepEqual(usageCore.inspectTrajectoryActivity(null), {
+    isRunning: false,
+    isThinking: false,
+    hasError: false,
+  });
 
-  const traj = {
-    steps: [
-      { status: 3, step: { case: 'userInput' } },
-      { status: 1, step: { case: 'plannerResponse', value: {} } },
-    ],
-    generatorMetadata: [
-      {
-        metadata: {
-          value: {
-            usage: { inputTokens: '2000', cacheReadTokens: '18000', outputTokens: '500', thinkingOutputTokens: '100' },
-            streamingDuration: { seconds: '1', nanos: 0 },
-            timeToFirstToken: { seconds: '0', nanos: 500000000 },
-            chatStartMetadata: {
-              contextWindowMetadata: {
-                estimatedTokensUsed: 50000,
-                maxContextTokens: 256000,
-                tokenBreakdown: {
-                  groups: [
-                    { type: 1, name: 'System', numTokens: 10000 },
-                    { type: 2, name: 'Tools', numTokens: 5000 },
-                    { type: 7, name: 'Chat', numTokens: 35000 },
-                  ],
-                },
-              },
-            },
-          },
-        },
+  // Completed conversation -> idle
+  assert.deepEqual(
+    usageCore.inspectTrajectoryActivity({
+      trajectory: {
+        steps: [
+          { status: 3, step: { case: 'userInput' } },
+          { status: 3, step: { case: 'plannerResponse', value: { response: 'Done' } } },
+        ],
       },
-    ],
-  };
-  const info = usageCore.analyzeActiveConversation(traj);
-  assert.equal(info.calls, 1);
-  assert.equal(info.steps, 2);
-  assert.equal(info.contextUsed, 50000);
-  assert.equal(info.sysTokens, 10000);
-  assert.equal(info.toolsTokens, 5000);
-  assert.equal(info.msgTokens, 35000);
-  assert.equal(info.cacheHitPct, 90);
-  assert.equal(info.lastSpeed, 500);
-  assert.equal(info.isRunning, true);
-  assert.equal(info.isThinking, true);
-});
-
-test('computeRingTelemetry calculates remaining percentage, color thresholds, draft deduction, and quota mode', () => {
-  // 1. > 30% remaining -> ok (#257de0)
-  const okRing = usageCore.computeRingTelemetry({
-    activeInfo: { contextUsed: 51500, maxContextTokens: 256000 },
-    draftTokens: 0,
-    ringMode: 'context',
-  });
-  assert.equal(okRing.mode, 'context');
-  assert.equal(okRing.remainingTokens, 204500);
-  assert.equal(okRing.pctRound, 80);
-  assert.equal(okRing.level, 'ok');
-  assert.equal(okRing.color, '#257de0');
-
-  // 2. <= 30% remaining -> warn (#fbb315)
-  const warnRing = usageCore.computeRingTelemetry({
-    activeInfo: { contextUsed: 185000, maxContextTokens: 256000 },
-    draftTokens: 5000,
-    ringMode: 'context',
-  });
-  assert.equal(warnRing.usedTokens, 190000);
-  assert.equal(warnRing.remainingTokens, 66000);
-  assert.equal(warnRing.pctRound, 26);
-  assert.equal(warnRing.level, 'warn');
-  assert.equal(warnRing.color, '#fbb315');
-
-  // 3. <= 10% remaining -> danger (#dc3c3d)
-  const dangerRing = usageCore.computeRingTelemetry({
-    activeInfo: { contextUsed: 240000, maxContextTokens: 256000 },
-    draftTokens: 0,
-    ringMode: 'context',
-  });
-  assert.equal(dangerRing.pctRound, 6);
-  assert.equal(dangerRing.level, 'danger');
-  assert.equal(dangerRing.color, '#dc3c3d');
-
-  // 4. Quota mode with valid quotaInfo vs fallback when quotaInfo is null
-  const quotaRing = usageCore.computeRingTelemetry({
-    activeInfo: { contextUsed: 50000, maxContextTokens: 256000 },
-    quotaInfo: { effectiveRemainingPct: 71.3 },
-    ringMode: 'quota',
-  });
-  assert.equal(quotaRing.mode, 'quota');
-  assert.equal(quotaRing.pctRound, 71);
-  assert.equal(quotaRing.color, '#257de0');
-
-  const fallbackRing = usageCore.computeRingTelemetry({
-    activeInfo: { contextUsed: 128000, maxContextTokens: 256000 },
-    quotaInfo: null,
-    ringMode: 'quota',
-  });
-  assert.equal(fallbackRing.mode, 'context');
-  assert.equal(fallbackRing.pctRound, 50);
-});
-
-test('estimateTextTokens, normalizeQuotaData, and getActiveQuotaInfo handle CJK, code, and model pools', () => {
-  assert.equal(usageCore.estimateTextTokens('').tokens, 0);
-  const est = usageCore.estimateTextTokens('把右下角的圆环改成显示用量剩余 const x = 42;');
-  assert.ok(est.tokens > 5);
-  assert.ok(est.cjk >= 10);
-
-  const qData = usageCore.normalizeQuotaData(
-    null,
-    {
-      userStatus: {
-        cascadeModelConfigData: {
-          clientModelConfigs: [
-            {
-              label: 'Gemini 4 Argon (High)',
-              quotaInfo: { remainingFraction: 0.75, resetTime: { seconds: String(Math.floor(Date.now() / 1000) + 3600) } },
-            },
-            {
-              label: 'Claude Opus 5.5 (High)',
-              quotaInfo: { remainingFraction: 0.2, resetTime: { seconds: String(Math.floor(Date.now() / 1000) + 7200) } },
-            },
-          ],
-        },
-      },
-    }
+    }),
+    { isRunning: false, isThinking: false, hasError: false }
   );
-  assert.ok(qData.groups.length >= 2);
-  const activeArgon = usageCore.getActiveQuotaInfo(qData, 'Gemini 4 Argon (High)');
-  assert.ok(activeArgon);
-  assert.equal(Math.round(activeArgon.effectiveRemainingPct), 75);
+
+  // Active plannerResponse before text streams -> running & thinking
+  assert.deepEqual(
+    usageCore.inspectTrajectoryActivity({
+      steps: [
+        { status: 3, step: { case: 'userInput' } },
+        { status: 1, step: { case: 'plannerResponse', value: { thinking: 'Analyzing...', response: '' } } },
+      ],
+    }),
+    { isRunning: true, isThinking: true, hasError: false }
+  );
+
+  // Active plannerResponse once response text starts streaming -> running (typing), not thinking
+  assert.deepEqual(
+    usageCore.inspectTrajectoryActivity({
+      steps: [
+        { status: 3, step: { case: 'userInput' } },
+        { status: 2, step: { case: 'plannerResponse', value: { response: 'Here is' } } },
+      ],
+    }),
+    { isRunning: true, isThinking: false, hasError: false }
+  );
+
+  // Error within last 8 steps sets hasError; error older than last 8 steps does not linger
+  const recentErrSteps = [
+    ...Array.from({ length: 5 }, () => ({ status: 3, step: { case: 'generic' } })),
+    { status: 4, step: { case: 'runCommand' } },
+    { status: 3, step: { case: 'plannerResponse', value: { response: 'Handled' } } },
+  ];
+  assert.deepEqual(usageCore.inspectTrajectoryActivity({ steps: recentErrSteps }), {
+    isRunning: false,
+    isThinking: false,
+    hasError: true,
+  });
+
+  const staleErrSteps = [
+    { status: 6, step: { case: 'runCommand' } },
+    ...Array.from({ length: 8 }, () => ({ status: 3, step: { case: 'generic' } })),
+  ];
+  assert.deepEqual(usageCore.inspectTrajectoryActivity({ steps: staleErrSteps }), {
+    isRunning: false,
+    isThinking: false,
+    hasError: false,
+  });
 });
 
-test('analyzeActiveConversation splits chatMsgTokens and toolResultsTokens without double-counting and attaches subagent telemetry', () => {
-  const traj = {
-    steps: [
-      { status: 3, metadata: { createdAt: { seconds: '1700000000' } }, step: { case: 'userInput', value: { query: 'Inspect files' } } },
-      { status: 3, metadata: { createdAt: { seconds: '1700000005' }, toolCall: { name: 'read_file' } }, step: { case: 'generic', value: {} } },
-      { status: 3, metadata: { createdAt: { seconds: '1700000010' } }, step: { case: 'plannerResponse', value: { response: 'Done' } } },
-    ],
-    generatorMetadata: [
+test('normalizeModelDisplayName normalizes 2.33.0 raw slugs and merges cached aliases in aggregateUsageRollup', () => {
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-4-argon-trial'), 'Gemini 4 Argon');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-3.8-flash-tiered'), 'Gemini 3.8 Flash');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-3.8-flash-n'), 'Gemini 3.8 Flash');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-4-neon-high'), 'Gemini 4 Neon (High)');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-4-carbon-xhigh'), 'Gemini 4 Carbon (XHigh)');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-pro-orchestrator-neon'), 'Orchestrator (Neon)');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-pro-orchestrator'), 'Orchestrator (Carbon)');
+  assert.equal(usageCore.normalizeModelDisplayName('MODEL_PLACEHOLDER_M667'), 'Model #M667');
+  assert.equal(usageCore.normalizeModelDisplayName('Gemini 4 Hydrogen (Medium)'), 'Gemini 4 Hydrogen (Medium)');
+
+  const now = new Date(2026, 10, 14, 12, 0, 0);
+  const dToday = usageCore.homeDayKey(now);
+  const rec = usageCore.analyzeTrajectoryForUsage(
+    {
+      steps: [{ metadata: { createdAt: { seconds: Math.floor(now.getTime() / 1000) } } }],
+      generatorMetadata: [
+        {
+          stepIndices: [0],
+          metadata: {
+            value: {
+              responseModel: 'gemini-3.8-flash-tiered',
+              usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            },
+          },
+        },
+        {
+          stepIndices: [0],
+          metadata: {
+            value: {
+              model: 'MODEL_PLACEHOLDER_M667',
+              usage: { inputTokens: 50, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 },
+            },
+          },
+        },
+      ],
+    },
+    { lastModifiedTime: { seconds: Math.floor(now.getTime() / 1000) }, stepCount: 1 },
+    'conv-slugs'
+  );
+  assert.ok(rec.days[dToday].models['Gemini 3.8 Flash']);
+  assert.ok(rec.days[dToday].models['Model #M667']);
+
+  const merged = usageCore.aggregateUsageRollup(
+    [
       {
-        stepIndices: [0, 1, 2],
-        metadata: {
-          value: {
-            modelDisplayName: 'Gemini 4 Argon (High)',
-            usage: { inputTokens: '4000', cacheReadTokens: '124000', outputTokens: '500', thinkingOutputTokens: '100' },
-            chatStartMetadata: {
-              contextWindowMetadata: {
-                estimatedTokensUsed: 131200,
-                maxContextTokens: 256000,
-                tokenBreakdown: {
-                  groups: [
-                    { type: 1, name: 'System', numTokens: 11900, children: [{ name: 'SYSTEM_PROMPT', numTokens: 11900 }] },
-                    { type: 2, name: 'Tools', numTokens: 8200, children: [{ name: 'read_file', numTokens: 8200 }] },
-                    {
-                      type: 7,
-                      name: 'Messages',
-                      numTokens: 111100,
-                      children: [
-                        { name: '0: USER_INPUT', numTokens: 12000 },
-                        { name: '1: GENERIC', numTokens: 89200 },
-                        { name: '2: PLANNER_RESPONSE', numTokens: 9900 },
-                      ],
-                    },
-                  ],
-                },
-              },
+        cascadeId: 'c1',
+        subagent: false,
+        days: {
+          [dToday]: {
+            calls: 2,
+            input: 200,
+            output: 40,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 240,
+            hours: new Array(24).fill(0),
+            models: {
+              'gemini-3.8-flash-tiered': { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, total: 120, calls: 1 },
+              'gemini-3.8-flash-n': { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, total: 120, calls: 1 },
             },
           },
         },
       },
     ],
-  };
-
-  const info = usageCore.analyzeActiveConversation(traj, {
-    cascadeId: 'parent-1',
-    subagents: [
-      {
-        id: 'sub-abc12345',
-        parentId: 'parent-1',
-        rootId: 'parent-1',
-        status: 1,
-        createdAtSec: 1700000006,
-        analysis: {
-          totalCalls: 4,
-          totalSteps: 12,
-          totalTokens: 45000,
-          totalOutput: 2100,
-          contextUsed: 18000,
-          lastModel: 'Gemini 4 Argon (High)',
-          toolBreakdown: [{ name: 'run_command', count: 3, tokens: 4000 }],
-        },
-      },
-    ],
-  });
-
-  // Verify no double counting: sys + tools + chatMsgTokens + toolResultsTokens === contextUsed
-  assert.equal(info.sysTokens, 11900);
-  assert.equal(info.toolsTokens, 8200);
-  assert.equal(info.msgTokens, 111100);
-  assert.equal(info.toolResultsTokens, 89200);
-  assert.equal(info.chatMsgTokens, 21900);
-  assert.equal(info.sysTokens + info.toolsTokens + info.chatMsgTokens + info.toolResultsTokens, 131200);
-
-  // Verify subagent aggregation and per-turn attribution
-  assert.equal(info.subagentCount, 1);
-  assert.equal(info.subagentCalls, 4);
-  assert.equal(info.subagentTokens, 45000);
-  assert.equal(info.turnDetails.length, 1);
-  assert.equal(info.turnDetails[0].toolCalls, 1);
-  assert.equal(info.turnDetails[0].subagentCount, 1);
-  assert.equal(info.turnDetails[0].subagentCalls, 4);
-  assert.equal(info.turnDetails[0].subagentTokens, 45000);
-});
-
-test('analyzeActiveConversation exposes liveTokens and liveSpeed during Turn 1 before generatorMetadata completes', () => {
-  const traj = {
-    steps: [
-      { status: 3, step: { case: 'userInput', value: { query: 'Hello' } } },
-      {
-        status: 1,
-        metadata: { viewableAt: { seconds: '1000', nanos: 0 }, modelUsage: { outputTokens: '42' } },
-        step: { case: 'plannerResponse', value: { thinking: 'Analyzing the workspace files carefully...', response: '' } },
-      },
-    ],
-    generatorMetadata: [],
-  };
-  const info = usageCore.analyzeActiveConversation(traj, { cascadeId: 'new-c1', nowSec: 1002 });
-  assert.equal(info.calls, 0);
-  assert.equal(info.steps, 2);
-  assert.equal(info.totalTokens, 0);
-  assert.equal(info.isRunning, true);
-  assert.equal(info.isThinking, true);
-  assert.equal(info.liveTokens, 42);
-  assert.equal(info.liveSpeed, 21);
-  assert.equal(info.displaySpeed, 21);
-});
-
-test('getActiveQuotaInfo prioritizes Argon and Claude/GPT before matching specific or default Gemini groups', () => {
-  const quota = {
-    groups: [
-      { name: 'Gemini', buckets: [{ window: '5h', disabled: false, remainingPct: 60 }] },
-      { name: 'Gemini 4 Argon', buckets: [{ window: '5h', disabled: false, remainingPct: 25 }] },
-      { name: 'Gemini 3.8 Flash', buckets: [{ window: '5h', disabled: false, remainingPct: 90 }] },
-      { name: 'Claude / GPT', buckets: [{ window: 'weekly', disabled: false, remainingPct: 40 }] },
-    ],
-    modelConfigs: [],
-  };
-  assert.equal(usageCore.getActiveQuotaInfo(quota, 'Gemini 4 Argon (High)')?.groupName, 'Gemini 4 Argon');
-  assert.equal(usageCore.getActiveQuotaInfo(quota, 'Gemini 3.8 Flash (Low)')?.groupName, 'Gemini 3.8 Flash');
-  assert.equal(usageCore.getActiveQuotaInfo(quota, 'Gemini 4 Hydrogen Extra')?.groupName, 'Gemini');
-  assert.equal(usageCore.getActiveQuotaInfo(quota, 'Claude Opus 5.5')?.groupName, 'Claude / GPT');
+    'all',
+    0.5,
+    true,
+    now
+  );
+  assert.equal(merged.models.length, 1);
+  assert.equal(merged.models[0].id, 'Gemini 3.8 Flash');
+  assert.equal(merged.models[0].calls, 2);
+  assert.equal(merged.models[0].tokens, 240);
 });

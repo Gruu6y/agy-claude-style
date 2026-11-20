@@ -12,9 +12,15 @@
   }
   document
     .querySelectorAll(
-      '#ag-token-hud-style, .ag-th-top-bar, .ag-th-bottom-bar, .ag-th-rim-progress, .ag-th-footer-chip, .ag-th-popover, .ag-th-turn-bar, .ag-th-reopen-pill'
+      '#ag-token-hud-style, .ag-th-top-bar, .ag-th-bottom-bar, .ag-th-rim-progress, .ag-th-footer-chip, .ag-th-popover, .ag-th-turn-bar, .ag-th-reopen-pill, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip'
     )
     .forEach((n) => n.remove());
+  document.querySelectorAll('[data-ag-cs-rim]').forEach((el) => {
+    el.removeAttribute('data-ag-cs-rim');
+    el.style.removeProperty('--ag-cs-rim-pct');
+    el.style.removeProperty('--ag-cs-rim-color');
+  });
+  document.documentElement?.removeAttribute?.('data-ag-cs-hud-compact');
 
   if (
     window.__agClaudeStyle &&
@@ -46,6 +52,11 @@
     delete window.__agCsI18n;
   }
 
+  document
+    .querySelectorAll('.ag-cs-crab, .ag-cs-smooth-caret, .ag-cs-home-panel-seat, .ag-cs-ripple-canvas, .ag-cs-effort-popover, .ag-cs-perf-backdrop, #ag-cs-settings-sec')
+    .forEach((n) => n.remove());
+  document.querySelectorAll('[data-ag-cs-crab-anchor]').forEach((el) => el.removeAttribute('data-ag-cs-crab-anchor'));
+
   const usageCore = globalThis.__agCsUsageCore;
   const rippleCore = globalThis.__agCsRippleCore;
   const mascotCore = globalThis.__agCsMascotCore;
@@ -66,22 +77,40 @@
   const STORAGE_FILE_CFG_KEY = 'agClaudeStyle.lastFileConfig.v1';
   const STORAGE_USAGE_CACHE_KEY = 'agClaudeStyle.trajRollup.v1';
 
-  function loadSettings(base) {
+  function sanitizeRuntimeSettings(obj, base) {
+    const cleanBase = { ...base };
+    delete cleanBase.binding;
+    delete cleanBase.pollIntervalMs;
+    delete cleanBase.codeHash;
+    const out = { ...cleanBase };
+    if (obj && typeof obj === 'object') {
+      for (const key of Object.keys(cleanBase)) {
+        if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
+          out[key] = obj[key];
+        }
+      }
+    }
+    return out;
+  }
+
+  function loadSettings(base, { preferBase = false } = {}) {
     try {
-      const cleanBase = { ...base };
-      delete cleanBase.binding;
-      delete cleanBase.pollIntervalMs;
-      delete cleanBase.codeHash;
+      const cleanBase = sanitizeRuntimeSettings(null, base);
       const baseJson = JSON.stringify(cleanBase);
       const prevBaseJson = localStorage.getItem(STORAGE_FILE_CFG_KEY);
-      if (prevBaseJson && prevBaseJson !== baseJson) {
+      const hasLiveBinding = Boolean(base?.binding && typeof window[base.binding] === 'function');
+      if (preferBase || hasLiveBinding || (prevBaseJson && prevBaseJson !== baseJson)) {
         localStorage.setItem(STORAGE_FILE_CFG_KEY, baseJson);
         localStorage.setItem(STORAGE_SETTINGS_KEY, baseJson);
-        return { ...base };
+        return { ...base, ...cleanBase };
       }
       if (!prevBaseJson) localStorage.setItem(STORAGE_FILE_CFG_KEY, baseJson);
-      const saved = JSON.parse(localStorage.getItem(STORAGE_SETTINGS_KEY) || '{}');
-      return { ...base, ...saved };
+      const savedRaw = JSON.parse(localStorage.getItem(STORAGE_SETTINGS_KEY) || '{}');
+      const sanitizedSaved = sanitizeRuntimeSettings(savedRaw, cleanBase);
+      if (JSON.stringify(savedRaw) !== JSON.stringify(sanitizedSaved)) {
+        localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(sanitizedSaved));
+      }
+      return { ...base, ...sanitizedSaved };
     } catch {
       return { ...base };
     }
@@ -93,14 +122,25 @@
   function saveSetting(key, value) {
     cfg[key] = value;
     try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_SETTINGS_KEY) || '{}');
+      const saved = sanitizeRuntimeSettings(JSON.parse(localStorage.getItem(STORAGE_SETTINGS_KEY) || '{}'), cfg);
       saved[key] = value;
       localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(saved));
     } catch {}
+    let sentToHost = false;
     try {
       const send = window[cfg.binding];
-      if (typeof send === 'function') send(JSON.stringify({ key, value }));
+      if (typeof send === 'function') {
+        send(JSON.stringify({ key, value }));
+        sentToHost = true;
+      }
     } catch {}
+    if (sentToHost) {
+      try {
+        const fileCfg = sanitizeRuntimeSettings(JSON.parse(localStorage.getItem(STORAGE_FILE_CFG_KEY) || '{}'), cfg);
+        fileCfg[key] = value;
+        localStorage.setItem(STORAGE_FILE_CFG_KEY, JSON.stringify(fileCfg));
+      } catch {}
+    }
     applyRootAttrs();
     scheduleSync();
   }
@@ -125,14 +165,6 @@
     return lang === 'zh-CN' || lang === 'zh-TW' || lang === 'yue';
   }
 
-  function fmtBucketReset(bucket, lang = getLang()) {
-    if (!bucket) return '';
-    if (bucket.resetSeconds > 0 && typeof usageCore?.fmtResetTime === 'function') {
-      return usageCore.fmtResetTime(bucket.resetSeconds, lang) || bucket.resetIn || '';
-    }
-    return bucket.resetIn || '';
-  }
-
   function isDarkTheme() {
     const b = document.body?.classList;
     const h = document.documentElement?.classList;
@@ -146,21 +178,11 @@
   let lastThemeKey = '';
   let lastAppliedLang = '';
 
-  function refreshOpenContextPopover() {
-    if (!openPopover || !openPopover.isConnected) return;
-    const latest = activeTrajCache.get(openPopoverCascadeId)?.data || null;
-    renderContextPopoverContent(openPopover, latest, openPopoverCascadeId);
-    if (openPopoverAnchor && openPopoverAnchor.isConnected) {
-      positionPopoverAboveAnchor(openPopover, openPopoverAnchor);
-    }
-  }
-
   function refreshOpenUiForLanguage() {
     const inHero = Boolean(document.querySelector('.agy-home [data-testid="home-greeting"]'));
     syncGreeting(inHero);
     if (inHero && cfg.homeLayout === 'studio') renderHomePanel(true);
     refreshOpenEffortPopover();
-    refreshOpenContextPopover();
     syncComposers();
     ensureSettingsSection();
   }
@@ -177,7 +199,7 @@
     html.setAttribute('data-ag-cs-logo-ink', cfg.logoInk === 'foreground' ? 'foreground' : 'accent');
     html.setAttribute('data-ag-cs-sidebar', cfg.sidebarRestyle === false ? 'off' : 'on');
     html.setAttribute('data-ag-cs-sidebar-compact', cfg.sidebarCompact === true ? 'on' : 'off');
-    html.setAttribute('data-ag-cs-hud-compact', cfg.hudCompact === true ? 'on' : 'off');
+    html.removeAttribute('data-ag-cs-hud-compact');
     html.setAttribute('data-ag-cs-effort-accent', cfg.effortAccent === false ? 'off' : 'on');
     html.setAttribute('data-ag-cs-lang', lang);
     const isCjk = i18nCore && typeof i18nCore.isCjkLanguage === 'function' ? i18nCore.isCjkLanguage(lang) : isZh();
@@ -935,135 +957,8 @@
     rippleMount = state;
   }
 
-  // ── Composer Decorations, Token HUD Inspector, Effort Slider & Smooth Caret ─
-  const activeTrajCache = new Map(); // cascadeId -> { fetching, lastMod, lastStep, data }
-  const subagentTrajCache = new Map(); // subId -> { stepCount, status, analysis }
-  const knownModelMaxCtx = new Map(); // normalized model base -> maxContextTokens
-  const expandedHudGroups = new Set();
-  let cachedQuotaData = null;
-  let quotaFetchPromise = null;
-  let lastQuotaFetchAt = 0;
-  let openPopover = null;
-  let openPopoverAnchor = null;
-  let openPopoverCascadeId = '';
-  let activeHudTab = 'breakdown';
-
-  function normalizeModelCtxKey(label) {
-    return String(label || '')
-      .replace(/\s*\([^)]*\)\s*/g, ' ')
-      .replace(/\b(?:low|medium|med|high|xhigh|extra|max|minimal|light|none|off|ultra)\b/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .toLowerCase();
-  }
-
-  function getKnownMaxContextForCard(card, data) {
-    const key = normalizeModelCtxKey(getCurrentModelLabel(card) || data?.lastModel || '');
-    return (key && knownModelMaxCtx.get(key)) || 0;
-  }
-
-  function createEmptyConvoData(cascadeId = '', maxContextTokens = 0) {
-    const known = maxContextTokens > 0 ? { maxContextTokens } : undefined;
-    if (usageCore && typeof usageCore.analyzeActiveConversation === 'function') {
-      return usageCore.analyzeActiveConversation(null, { cascadeId, knownLimits: known });
-    }
-    const maxCtx = maxContextTokens > 0 ? maxContextTokens : 256000;
-    return {
-      cascadeId: String(cascadeId || ''),
-      turns: 0,
-      turnDetails: [],
-      toolBreakdown: [],
-      chatMsgTokens: 0,
-      toolResultsTokens: 0,
-      overheadTokens: 0,
-      lastModel: '',
-      lastFreshInput: 0,
-      lastCacheRead: 0,
-      lastOutput: 0,
-      lastThinking: 0,
-      totalOutput: 0,
-      subagents: [],
-      subagentCount: 0,
-      subagentCalls: 0,
-      subagentTokens: 0,
-      calls: 0,
-      totalCalls: 0,
-      callList: [],
-      lastCall: null,
-      hasCalls: false,
-      steps: 0,
-      totalSteps: 0,
-      contextUsed: 0,
-      contextRemaining: maxCtx,
-      maxContextTokens: maxCtx,
-      contextPct: 0,
-      contextRemainingPct: 100,
-      sysTokens: 0,
-      toolsTokens: 0,
-      msgTokens: 0,
-      sysChildren: [],
-      toolsChildren: [],
-      msgChildren: [],
-      topSteps: [],
-      userMsgTokens: 0,
-      botMsgTokens: 0,
-      toolIoTokens: 0,
-      sumInput: 0,
-      sumCacheRead: 0,
-      sumCacheWrite: 0,
-      sumOutput: 0,
-      sumThinking: 0,
-      sumResponse: 0,
-      totalTokens: 0,
-      sumAllTokens: 0,
-      cacheHitPct: 0,
-      overallCacheHitPct: 0,
-      overallThinkPct: 0,
-      lastSpeed: 0,
-      lastTtft: 0,
-      avgTtft: 0,
-      avgSpeed: 0,
-      latestValidSpeed: 0,
-      liveSpeed: 0,
-      liveTokens: 0,
-      displaySpeed: 0,
-      isLiveSpeed: false,
-      peakSpeed: 0,
-      sustainedPeakSpeed: 0,
-      checkpointIdx: -1,
-      compactedSteps: 0,
-      truncationReason: 0,
-      budgets: { customizationTokenBudget: 20000, rulesTokenBudget: 20000 },
-      hasActiveLimits: false,
-      isRunning: false,
-      isThinking: false,
-      hasError: false,
-    };
-  }
-
-  function resolveCardConvoData(card, fallbackData) {
-    const ib = card?.closest?.('[data-testid="agent-input-box"]');
-    const cid = resolveCascadeId(ib);
-    if (cid) {
-      const hit = activeTrajCache.get(cid)?.data;
-      if (hit) return hit;
-    }
-    return card?._agCsLastData || fallbackData || createEmptyConvoData(cid, getKnownMaxContextForCard(card, fallbackData));
-  }
-
-  function closeContextPopover() {
-    if (openPopover && openPopover.parentElement) openPopover.parentElement.removeChild(openPopover);
-    openPopover = null;
-    openPopoverAnchor = null;
-    openPopoverCascadeId = '';
-  }
-
-  function formatCompactK(n) {
-    const v = Number(n) || 0;
-    if (v >= 1000000) return (v / 1000000).toFixed(2) + 'M';
-    if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
-    return String(Math.round(v));
-  }
+  // ── Composer Helpers, Effort Slider, Smooth Caret & Crab Activity Probe ─
+  const crabStatusCache = new Map(); // cascadeId -> { fetching, lastStep, lastMod, lastRunning, lastAt, status }
 
   function escapeHtml(s) {
     return String(s ?? '')
@@ -1088,654 +983,58 @@
     return '';
   }
 
-  function getDraftInfo(card) {
-    const scope = card || document.querySelector('[data-testid="agent-input-box"]') || document;
-    const ed = scope.querySelector ? scope.querySelector('[contenteditable="true"]') : null;
-    const raw = ed ? String(ed.innerText ?? ed.textContent ?? '').trim() : '';
-    if (!raw || typeof usageCore.estimateTextTokens !== 'function') {
-      return { tokens: 0, chars: 0, cjk: 0, words: 0, codeSymbols: 0 };
-    }
-    return usageCore.estimateTextTokens(raw);
-  }
-
-  async function fetchQuotaData(force = false) {
-    const h = ensureHooks(true);
-    if (!h) return cachedQuotaData;
-    const now = Date.now();
-    if (!force && cachedQuotaData && now - lastQuotaFetchAt < 25000) return cachedQuotaData;
-    if (quotaFetchPromise) return quotaFetchPromise;
-    quotaFetchPromise = (async () => {
-      try {
-        let raw = null;
-        if (typeof h.svc?.retrieveUserQuotaSummary === 'function') {
-          raw = await h.svc.retrieveUserQuotaSummary({});
-        }
-        if (typeof usageCore.normalizeQuotaData === 'function') {
-          const st = h.store?.getState?.() || null;
-          cachedQuotaData = usageCore.normalizeQuotaData(raw, st, st?.credits || null, getLang());
-        }
-        lastQuotaFetchAt = Date.now();
-      } catch {} finally {
-        quotaFetchPromise = null;
-      }
-      return cachedQuotaData;
-    })();
-    return quotaFetchPromise;
-  }
-
-  function getActiveQuotaForInfo(data, card) {
-    if (typeof usageCore.getActiveQuotaInfo !== 'function') return null;
-    const modelLabel = getCurrentModelLabel(card) || data?.lastModel || '';
-    return usageCore.getActiveQuotaInfo(cachedQuotaData, modelLabel);
-  }
-
-  function getRingTelemetryForCard(card, data) {
-    const draftEst = getDraftInfo(card);
-    const activeQuota = getActiveQuotaForInfo(data, card);
-    const knownMax = getKnownMaxContextForCard(card, data);
-    const effectiveInfo =
-      data && (data.calls > 0 || data.hasActiveLimits || !knownMax)
-        ? data
-        : { ...(data || {}), maxContextTokens: knownMax || Number(data?.maxContextTokens || 256000) };
-    if (typeof usageCore.computeRingTelemetry === 'function') {
-      return {
-        ring: usageCore.computeRingTelemetry({
-          activeInfo: effectiveInfo,
-          quotaInfo: activeQuota,
-          draftTokens: draftEst.tokens,
-          ringMode: cfg.ringMode || 'context',
-          knownLimits: knownMax > 0 ? { maxContextTokens: knownMax } : null,
-        }),
-        draftEst,
-        activeQuota,
-      };
-    }
-    const maxTokens = Number(effectiveInfo?.maxContextTokens || 256000);
-    const usedTokens = Number(data?.contextUsed || 0) + draftEst.tokens;
-    const remainingTokens = Math.max(0, maxTokens - usedTokens);
-    const pct = maxTokens > 0 ? Math.max(0, Math.min(100, (remainingTokens / maxTokens) * 100)) : 100;
-    const pctRound = Math.round(pct);
-    const color = pct <= 10 ? '#dc3c3d' : pct <= 30 ? '#fbb315' : '#257de0';
+  function readStoreSummaryMeta(store, cascadeId) {
+    const st = store?.getState?.();
+    const allSummaries = st?.trajectorySummaries?.summaries || st?.cascadeTrajectorySummaries || {};
+    const sumEntry = allSummaries[cascadeId];
+    const sum = sumEntry?.summary || sumEntry || {};
     return {
-      ring: {
-        mode: 'context',
-        pct,
-        remainingPct: pct,
-        pctRound,
-        level: pct <= 10 ? 'danger' : pct <= 30 ? 'warn' : 'ok',
-        color,
-        usedTokens,
-        remainingTokens,
-        maxTokens,
-        draftTokens: draftEst.tokens,
-        contextUsedPct: 100 - pct,
-        contextRemainingPct: pct,
-        quotaRemainingPct: null,
-      },
-      draftEst,
-      activeQuota,
+      stepCount: Number(sum?.stepCount || 0),
+      lastMod: Number(sum?.lastModifiedTime?.seconds || 0),
+      running: !!(sum?.notFullyIdle || sum?.hasActivity || sum?.status === 2 || sum?.hasRunningSubagents),
     };
   }
 
-  function fillCompactCommand() {
-    const ed = document.querySelector('[data-testid="agent-input-box"] [contenteditable="true"]');
-    if (!ed) return false;
-    try {
-      ed.focus();
-      if (typeof document.execCommand === 'function') {
-        document.execCommand('selectAll', false, null);
-        const ok = document.execCommand('insertText', false, '/compact');
-        if (ok) return true;
-      }
-      ed.textContent = '/compact';
-      if (typeof InputEvent === 'function') {
-        ed.dispatchEvent(new InputEvent('input', { bubbles: true, data: '/compact', inputType: 'insertText' }));
-      }
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  function renderContextPopoverContent(pop, data, cascadeId) {
-    const lang = getLang();
-    const ui = uiText(lang);
-    const card = openPopoverAnchor?.closest?.('.surface-composer-card') || document.querySelector('[data-testid="agent-input-box"] .surface-composer-card');
-    const { ring, draftEst, activeQuota } = getRingTelemetryForCard(card, data);
-    const totalW = ring.maxTokens || 256000;
-    const sys = Number(data?.sysTokens || 0);
-    const tools = Number(data?.toolsTokens || 0);
-    const toolRes = Number(data?.toolResultsTokens || 0);
-    const msgs = Number(
-      data?.chatMsgTokens != null ? data.chatMsgTokens : Math.max(0, Number(data?.msgTokens || 0) - toolRes)
-    );
-    const overhead = Number(data?.overheadTokens || 0);
-    const draft = Number(draftEst.tokens || 0);
-    const modelName = data?.lastModel || getCurrentModelLabel(card) || ui.activeModelFallback || 'Active Model';
-    const remStr = `${formatCompactK(ring.remainingTokens)} / ${formatCompactK(totalW)} (${ring.contextRemainingPct.toFixed(1)}%)`;
-    const usedStr = `${formatCompactK(ring.usedTokens)} (${ring.contextUsedPct.toFixed(1)}%)`;
-    const activeReset5h = fmtBucketReset(activeQuota?.b5h, lang);
-    const activeResetWeek = fmtBucketReset(activeQuota?.bWeek, lang);
-    const quotaBadgeHtml =
-      activeQuota && typeof activeQuota.effectiveRemainingPct === 'number'
-        ? `<span class="ag-cs-ctx-quota-pill" style="color:${activeQuota.effectiveRemainingPct <= 10 ? '#dc3c3d' : activeQuota.effectiveRemainingPct <= 30 ? '#fbb315' : '#38bdf8'}">${escapeHtml(ui.quotaRemShort || 'Quota Rem')} ${activeQuota.effectiveRemainingPct.toFixed(1)}%${activeReset5h ? ' · ' + escapeHtml(activeReset5h) : activeResetWeek ? ' · ' + escapeHtml(activeResetWeek) : ''}</span>`
-        : '';
-    const statusBadgeHtml = data?.isRunning
-      ? `<span class="ag-cs-ctx-live-pill">${escapeHtml(data.isThinking ? ui.thinkingEllipsis || 'Thinking…' : ui.streamingEllipsis || 'Streaming…')}</span>`
-      : '';
-
-    const pctOf = (v) => Math.max(0, Math.min(100, (v / totalW) * 100)).toFixed(2);
-    const turnCount = Array.isArray(data?.turnDetails) ? data.turnDetails.length : data?.turns || 0;
-    const toolCount = (Array.isArray(data?.toolBreakdown) ? data.toolBreakdown.length : 0) + Number(data?.subagentCount || 0);
-
-    let tabBodyHtml = '';
-    if (activeHudTab === 'breakdown') {
-      const sysChildren = Array.isArray(data?.sysChildren) ? data.sysChildren : [];
-      const toolsChildren = Array.isArray(data?.toolsChildren) ? data.toolsChildren : [];
-      const topSteps = Array.isArray(data?.topSteps) ? data.topSteps : [];
-      const segRows = [
-        {
-          id: 'sys',
-          color: '#3b82f6',
-          label: ui.segSystemRules || 'System & Rules',
-          val: sys,
-          children: sysChildren,
-        },
-        {
-          id: 'tools',
-          color: '#a855f7',
-          label: typeof ui.toolDeclarationsN === 'function' ? ui.toolDeclarationsN(toolsChildren.length) : `Tool Declarations (${toolsChildren.length})`,
-          val: tools,
-          children: toolsChildren,
-        },
-        {
-          id: 'msgs',
-          color: '#10b981',
-          label: ui.segChatMessages || 'Chat Messages',
-          val: msgs,
-        },
-        {
-          id: 'toolres',
-          color: '#f59e0b',
-          label: ui.segToolResults || 'Tool Results',
-          val: toolRes,
-          children: topSteps.map((s) => ({ name: s.label || s.name, tokens: s.tokens })),
-        },
-      ];
-      if (overhead > 0) {
-        segRows.push({ id: 'overhead', color: '#64748b', label: ui.segOverhead || 'Context Overhead', val: overhead });
-      }
-      if (draft > 0) {
-        segRows.push({
-          id: 'draft',
-          color: '#ec4899',
-          label: typeof ui.liveDraftN === 'function' ? ui.liveDraftN(draftEst.chars) : `Live Draft (${draftEst.chars} chars)`,
-          val: draft,
-        });
-      }
-      segRows.push({
-        id: 'rem',
-        color: ring.color,
-        label: ui.segRemaining || 'Remaining Free Capacity',
-        val: ring.remainingTokens,
-        highlight: true,
-      });
-
-      const rulesB = Number(data?.budgets?.rulesTokenBudget || 0);
-      const customB = Number(data?.budgets?.customizationTokenBudget || 0);
-
-      tabBodyHtml = `
-        <div class="ag-cs-ctx-kpi-grid">
-          <div class="ag-cs-ctx-kpi">
-            <span class="ag-cs-ctx-k">${escapeHtml(ui.kpiRemaining || 'Remaining Free')}</span>
-            <span class="ag-cs-ctx-v" style="color:${ring.color}">${formatCompactK(ring.remainingTokens)} <small>(${ring.contextRemainingPct.toFixed(1)}%)</small></span>
-            <span class="ag-cs-ctx-sub">${escapeHtml(ui.usedWord || 'Used')} ${formatCompactK(ring.usedTokens)} / ${formatCompactK(totalW)}</span>
-          </div>
-          <div class="ag-cs-ctx-kpi">
-            <span class="ag-cs-ctx-k">${escapeHtml(ui.kpiCacheHit || 'Cache Hit Rate')}</span>
-            <span class="ag-cs-ctx-v">${(data?.cacheHitPct || 0).toFixed(1)}%</span>
-            <span class="ag-cs-ctx-sub">${escapeHtml(ui.cacheReadShort || 'Read')} ${formatCompactK(data?.lastCacheRead || 0)} · ${escapeHtml(ui.cacheFreshShort || 'Fresh')} ${formatCompactK(data?.lastFreshInput || 0)}</span>
-          </div>
-          <div class="ag-cs-ctx-kpi">
-            <span class="ag-cs-ctx-k">${escapeHtml(ui.kpiSpeed || 'Output Speed')}</span>
-            <span class="ag-cs-ctx-v">${(data?.displaySpeed || data?.lastSpeed) ? (data.displaySpeed || data.lastSpeed) + ' tok/s' : '—'}</span>
-            <span class="ag-cs-ctx-sub">${escapeHtml(ui.speedAvgShort || 'Avg')} ${data?.avgSpeed || 0} tok/s · TTFT ${(data?.avgTtft || data?.lastTtft || 0).toFixed(2)}s</span>
-          </div>
-          <div class="ag-cs-ctx-kpi">
-            <span class="ag-cs-ctx-k">${escapeHtml(ui.kpiSessionTotal || 'Session Total')}</span>
-            <span class="ag-cs-ctx-v">${formatCompactK(data?.totalTokens || 0)}</span>
-            <span class="ag-cs-ctx-sub">${data?.turns || 0} ${escapeHtml(ui.turnsUnit || 'turns')} · ${data?.calls || 0} ${escapeHtml(ui.callsUnit || 'calls')} · ${escapeHtml(ui.outShort || 'Out')} ${formatCompactK(data?.totalOutput || 0)}</span>
-          </div>
-        </div>
-        <div class="ag-cs-ctx-sec-title">${escapeHtml(ui.ctxBreakdownTitle || 'Context Window Breakdown')}</div>
-        <div class="ag-cs-ctx-rows">
-          ${segRows
-            .map((r) => {
-              const hasCh = Array.isArray(r.children) && r.children.length > 0;
-              const isExp = hasCh && expandedHudGroups.has(r.id);
-              const chHtml = isExp
-                ? `<div class="ag-cs-ctx-children">
-                    ${r.children
-                      .slice(0, 12)
-                      .map(
-                        (c) => `
-                      <div class="ag-cs-ctx-child-row">
-                        <span class="ag-cs-ctx-child-name">${escapeHtml(c.name || '')}</span>
-                        <span class="ag-cs-ctx-child-val">${formatCompactK(c.tokens || 0)}</span>
-                      </div>`
-                      )
-                      .join('')}
-                  </div>`
-                : '';
-              return `
-                <div class="ag-cs-ctx-row${r.highlight ? ' is-highlight' : ''}${hasCh ? ' is-expandable' : ''}" ${hasCh ? `data-expand-group="${r.id}"` : ''}>
-                  <span class="ag-cs-ctx-row-label"><span class="ag-cs-ctx-dot" style="background:${r.color}"></span>${escapeHtml(r.label)}${hasCh ? ` <small class="ag-cs-ctx-caret">${isExp ? '▾' : '▸'}</small>` : ''}</span>
-                  <span class="ag-cs-ctx-row-val">${formatCompactK(r.val)} <small>(${((r.val / totalW) * 100).toFixed(1)}%)</small></span>
-                </div>
-                ${chHtml}`;
-            })
-            .join('')}
-        </div>
-        ${
-          rulesB > 0 || customB > 0
-            ? `<div class="ag-cs-ctx-budgets">
-                <span>${escapeHtml(ui.rulesBudget || 'Rules Budget')}: <strong>${formatCompactK(rulesB)}</strong></span>
-                <span>${escapeHtml(ui.customBudget || 'Custom Budget')}: <strong>${formatCompactK(customB)}</strong></span>
-                <span>${escapeHtml(ui.maxWindow || 'Max Window')}: <strong>${formatCompactK(totalW)}</strong></span>
-              </div>`
-            : ''
-        }
-        <div class="ag-cs-ctx-sec-title">${escapeHtml(ui.latestCallTitle || 'Latest Model Call')}</div>
-        <div class="ag-cs-ctx-latest-grid">
-          <div><span>${escapeHtml(ui.freshIn || 'Fresh In')}</span><strong>${formatCompactK(data?.lastFreshInput || 0)}</strong></div>
-          <div><span>${escapeHtml(ui.cacheRead || 'Cache Read')}</span><strong>${formatCompactK(data?.lastCacheRead || 0)}</strong></div>
-          <div><span>${escapeHtml(ui.replyOutput || 'Output')}</span><strong>${formatCompactK(data?.lastOutput || 0)}</strong></div>
-          <div><span>${escapeHtml(ui.thinkingTokens || 'Thinking')}</span><strong>${formatCompactK(data?.lastThinking || 0)}</strong></div>
-        </div>
-      `;
-    } else if (activeHudTab === 'turns') {
-      const turns = Array.isArray(data?.turnDetails) ? data.turnDetails.slice().reverse() : [];
-      if (turns.length === 0) {
-        tabBodyHtml = `<div class="ag-cs-ctx-empty">${escapeHtml(ui.turnsEmpty || 'No turn records in active conversation yet.')}</div>`;
-      } else {
-        tabBodyHtml = `
-          <div class="ag-cs-ctx-turns-list">
-            ${turns
-              .map((t) => {
-                const dSign = t.ctxDelta >= 0 ? '+' : '';
-                const dCls = t.ctxDelta >= 15000 ? 'is-high' : t.ctxDelta >= 5000 ? 'is-mid' : '';
-                return `
-                  <div class="ag-cs-ctx-turn-item">
-                    <div class="ag-cs-ctx-turn-top">
-                      <span class="ag-cs-ctx-turn-idx">#T${t.turn}</span>
-                      <span class="ag-cs-ctx-turn-model">${escapeHtml(t.model || modelName)}</span>
-                      <span class="ag-cs-ctx-turn-ctx">${escapeHtml(ui.ctxShort || 'Ctx')} ${formatCompactK(t.ctxUsed)}</span>
-                      <span class="ag-cs-ctx-turn-delta ${dCls}">${dSign}${formatCompactK(t.ctxDelta)}</span>
-                    </div>
-                    ${t.userPreview ? `<div class="ag-cs-ctx-turn-prompt">${escapeHtml(t.userPreview)}</div>` : ''}
-                    <div class="ag-cs-ctx-turn-meta">
-                      <span>${escapeHtml(ui.outShort || 'Out')} ${formatCompactK(t.output)}</span>
-                      ${t.thinking > 0 ? `<span>${escapeHtml(ui.thinkShort || 'Think')} ${formatCompactK(t.thinking)}</span>` : ''}
-                      ${t.toolCalls > 0 ? `<span>🔧 ×${t.toolCalls}</span>` : ''}
-                      ${t.speed > 0 ? `<span>⚡ ${t.speed} tok/s</span>` : ''}
-                      <span>${escapeHtml(ui.cacheShort || 'Cache')} ${t.cacheHitPct}%</span>
-                      ${t.subagentCalls > 0 ? `<span class="ag-cs-ctx-subagent-tag">🤖 ×${t.subagentCount || t.subagentCalls} (${formatCompactK(t.subagentTokens)})</span>` : ''}
-                    </div>
-                  </div>
-                `;
-              })
-              .join('')}
-          </div>
-        `;
-      }
-    } else if (activeHudTab === 'tools') {
-      const toolsList = Array.isArray(data?.toolBreakdown) ? data.toolBreakdown : [];
-      const subList = Array.isArray(data?.subagents) ? data.subagents : [];
-      const maxToolTok = toolsList.reduce((m, x) => Math.max(m, x.tokens || 0), 1);
-      const subHead =
-        typeof ui.subagentsHeading === 'function'
-          ? ui.subagentsHeading(data?.subagentCount || 0, data?.subagentCalls || 0, formatCompactK(data?.subagentTokens || 0))
-          : `Subagents (${data?.subagentCount || 0} · ${data?.subagentCalls || 0} calls · Total ${formatCompactK(data?.subagentTokens || 0)})`;
-      const toolHead =
-        typeof ui.toolResultsHeading === 'function'
-          ? ui.toolResultsHeading(formatCompactK(data?.toolResultsTokens || 0))
-          : `Tool Results Leaderboard (${formatCompactK(data?.toolResultsTokens || 0)} tok)`;
-      tabBodyHtml = `
-        <div class="ag-cs-ctx-sec-title">${escapeHtml(subHead)}</div>
-        ${
-          subList.length === 0
-            ? `<div class="ag-cs-ctx-empty-sm">${escapeHtml(ui.noSubagents || 'No subagents invoked in this session.')}</div>`
-            : `<div class="ag-cs-ctx-sub-list">
-                ${subList
-                  .map(
-                    (s, idx) => `
-                  <div class="ag-cs-ctx-sub-item">
-                    <div class="ag-cs-ctx-sub-head">
-                      <strong>🤖 #${idx + 1} (${escapeHtml(s.shortId || s.id || 'sub')}) ${s.isRunning ? `<em class="ag-cs-ctx-active-tag">${escapeHtml(ui.runningTag || 'Running')}</em>` : ''}</strong>
-                      <span>${formatCompactK(s.totalTokens)} tok</span>
-                    </div>
-                    <div class="ag-cs-ctx-sub-meta">
-                      <span>${escapeHtml(s.model || modelName)}</span>
-                      <span>${s.calls || 0} ${escapeHtml(ui.callsUnit || 'calls')} / ${s.steps || 0} ${escapeHtml(ui.stepsUnit || 'steps')}</span>
-                      <span>${escapeHtml(ui.outShort || 'Out')} ${formatCompactK(s.outputTokens || 0)}</span>
-                      ${s.toolCount > 0 ? `<span>🔧 ×${s.toolCount}</span>` : ''}
-                    </div>
-                  </div>`
-                  )
-                  .join('')}
-              </div>`
-        }
-        <div class="ag-cs-ctx-sec-title">${escapeHtml(toolHead)}</div>
-        ${
-          toolsList.length === 0
-            ? `<div class="ag-cs-ctx-empty-sm">${escapeHtml(ui.noToolOutputs || 'No tool output data yet.')}</div>`
-            : `<div class="ag-cs-ctx-tool-list">
-                ${toolsList
-                  .slice(0, 12)
-                  .map(
-                    (t) => `
-                  <div class="ag-cs-ctx-tool-row">
-                    <div class="ag-cs-ctx-tool-info">
-                      <span class="ag-cs-ctx-tool-name">${escapeHtml(t.name)} <small>×${t.count}</small></span>
-                      <span class="ag-cs-ctx-tool-val">~${formatCompactK(t.tokens)}</span>
-                    </div>
-                    <div class="ag-cs-ctx-tool-bar"><span style="width:${Math.min(100, ((t.tokens || 0) / maxToolTok) * 100).toFixed(1)}%"></span></div>
-                  </div>`
-                  )
-                  .join('')}
-              </div>`
-        }
-      `;
-    } else if (activeHudTab === 'quotas') {
-      const groups = Array.isArray(cachedQuotaData?.groups) ? cachedQuotaData.groups : [];
-      tabBodyHtml = `
-        <div class="ag-cs-ctx-sec-title">${escapeHtml(ui.quotaPoolsTitle || 'Model Quota Pools Remaining')}</div>
-        ${
-          groups.length === 0
-            ? `<div class="ag-cs-ctx-empty-sm">${escapeHtml(ui.quotaLoading || 'Loading model quota status…')}</div>`
-            : `<div class="ag-cs-ctx-quota-list">
-                ${groups
-                  .map((g) => {
-                    const qPct = typeof g.effectiveRemainingPct === 'number' ? g.effectiveRemainingPct : 0;
-                    const qCol = qPct <= 10 ? '#dc3c3d' : qPct <= 30 ? '#fbb315' : '#257de0';
-                    const isAct = activeQuota && activeQuota.groupName === g.groupName;
-                    const r5h = fmtBucketReset(g.b5h, lang);
-                    const rWeek = fmtBucketReset(g.bWeek, lang);
-                    return `
-                      <div class="ag-cs-ctx-quota-row${isAct ? ' is-active' : ''}">
-                        <div class="ag-cs-ctx-quota-top">
-                          <span><strong>${escapeHtml(g.groupName)}</strong>${isAct ? ` <em class="ag-cs-ctx-active-tag">${escapeHtml(ui.activeTag || 'Active')}</em>` : ''}</span>
-                          <span style="color:${qCol};font-weight:600">${escapeHtml(ui.remShort || 'Rem')} ${qPct.toFixed(1)}%</span>
-                        </div>
-                        <div class="ag-cs-ctx-quota-bar"><span style="width:${Math.max(0, Math.min(100, qPct)).toFixed(1)}%;background:${qCol}"></span></div>
-                        <div class="ag-cs-ctx-quota-sub">
-                          <span>${g.b5h && !g.b5h.disabled ? `5h: ${g.b5h.remainingPct.toFixed(1)}% (${escapeHtml(r5h || '—')})` : g.bWeek ? `${escapeHtml(ui.weeklyLabel || 'Weekly')}: ${g.bWeek.remainingPct.toFixed(1)}% (${escapeHtml(rWeek || '—')})` : ''}</span>
-                        </div>
-                      </div>
-                    `;
-                  })
-                  .join('')}
-              </div>`
-        }
-      `;
-    }
-
-    const tabTurnsLabel = typeof ui.tabTurnsN === 'function' ? ui.tabTurnsN(turnCount) : `Turns (${turnCount})`;
-    const tabToolsLabel = typeof ui.tabToolsN === 'function' ? ui.tabToolsN(toolCount) : `Tools (${toolCount})`;
-
-    pop.innerHTML = `
-      <div class="ag-cs-ctx-top-bar">
-        <div class="ag-cs-ctx-title-wrap">
-          <span class="ag-cs-ctx-title">${escapeHtml(ui.popoverTitle || 'Context & Token HUD')}</span>
-          <span class="ag-cs-ctx-model-badge">${escapeHtml(modelName)}</span>
-          ${statusBadgeHtml}
-        </div>
-        <div class="ag-cs-ctx-actions">
-          <button type="button" class="ag-cs-ctx-act-btn" data-ctx-act="compact" title="${escapeHtml(ui.compactBtnTitle || 'Fill /compact into composer')}">/compact</button>
-          <button type="button" class="ag-cs-ctx-act-btn" data-ctx-act="copy" title="${escapeHtml(ui.copyBtnTitle || 'Copy telemetry report')}">${escapeHtml(ui.copyBtnLabel || 'Copy')}</button>
-          <button type="button" class="ag-cs-ctx-act-btn" data-ctx-act="refresh" title="${escapeHtml(ui.refreshBtnTitle || 'Refresh telemetry')}">↻</button>
-          <button type="button" class="ag-cs-ctx-act-btn is-close" data-ctx-act="close" title="${escapeHtml(ui.closeBtnTitle || 'Close')}">×</button>
-        </div>
-      </div>
-      <div class="ag-cs-ctx-hero">
-        <div class="ag-cs-ctx-hero-line">
-          <span class="ag-cs-ctx-rem-main" style="color:${ring.color}">${escapeHtml(ui.remAvailLabel || 'Remaining')} ${remStr}</span>
-          <span class="ag-cs-ctx-used-sub">${escapeHtml(ui.usedWord || 'Used')} ${usedStr}${draft > 0 ? ` · ${escapeHtml(ui.draftWord || 'Draft')} +${formatCompactK(draft)}` : ''}</span>
-        </div>
-        ${quotaBadgeHtml ? `<div class="ag-cs-ctx-hero-sub">${quotaBadgeHtml}</div>` : ''}
-        <div class="ag-cs-ctx-bar">
-          <span class="ag-cs-ctx-seg-sys" style="width:${pctOf(sys)}%" title="${escapeHtml(ui.segSystemRules || 'System')}: ${formatCompactK(sys)}"></span>
-          <span class="ag-cs-ctx-seg-tools" style="width:${pctOf(tools)}%" title="${escapeHtml(ui.toolsShort || 'Tools')}: ${formatCompactK(tools)}"></span>
-          <span class="ag-cs-ctx-seg-msgs" style="width:${pctOf(msgs)}%" title="${escapeHtml(ui.segChatMessages || 'Messages')}: ${formatCompactK(msgs)}"></span>
-          <span class="ag-cs-ctx-seg-toolres" style="width:${pctOf(toolRes)}%" title="${escapeHtml(ui.segToolResults || 'Tool Results')}: ${formatCompactK(toolRes)}"></span>
-          <span class="ag-cs-ctx-seg-draft" style="width:${pctOf(draft)}%" title="${escapeHtml(ui.draftWord || 'Draft')}: ${formatCompactK(draft)}"></span>
-        </div>
-      </div>
-      <div class="ag-cs-ctx-tabs" role="tablist">
-        <button type="button" role="tab" class="ag-cs-ctx-tab${activeHudTab === 'breakdown' ? ' is-active' : ''}" data-ctx-tab="breakdown">${escapeHtml(ui.tabBreakdown || 'Breakdown')}</button>
-        <button type="button" role="tab" class="ag-cs-ctx-tab${activeHudTab === 'turns' ? ' is-active' : ''}" data-ctx-tab="turns">${escapeHtml(tabTurnsLabel)}</button>
-        <button type="button" role="tab" class="ag-cs-ctx-tab${activeHudTab === 'tools' ? ' is-active' : ''}" data-ctx-tab="tools">${escapeHtml(tabToolsLabel)}</button>
-        <button type="button" role="tab" class="ag-cs-ctx-tab${activeHudTab === 'quotas' ? ' is-active' : ''}" data-ctx-tab="quotas">${escapeHtml(ui.tabQuotas || 'Quotas')}</button>
-      </div>
-      <div class="ag-cs-ctx-body">
-        ${tabBodyHtml}
-      </div>
-    `;
-
-    pop.querySelectorAll('button[data-ctx-tab]').forEach((btn) => {
-      btn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        activeHudTab = btn.getAttribute('data-ctx-tab') || 'breakdown';
-        renderContextPopoverContent(pop, data, cascadeId);
-        if (openPopoverAnchor) positionPopoverAboveAnchor(pop, openPopoverAnchor);
-      });
-    });
-
-    pop.querySelectorAll('button[data-ctx-act]').forEach((btn) => {
-      btn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const act = btn.getAttribute('data-ctx-act');
-        if (act === 'close') {
-          closeContextPopover();
-        } else if (act === 'compact') {
-          closeContextPopover();
-          fillCompactCommand();
-        } else if (act === 'copy') {
-          const curLang = getLang();
-          const curUi = uiText(curLang);
-          const safeData = data || createEmptyConvoData(cascadeId, getKnownMaxContextForCard(card, data));
-          const report =
-            typeof usageCore.buildTelemetryReport === 'function'
-              ? usageCore.buildTelemetryReport(safeData, draftEst, cachedQuotaData, activeQuota, curLang)
-              : JSON.stringify(safeData || {}, null, 2);
-          if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-            navigator.clipboard.writeText(report).catch(() => {});
-          }
-          btn.textContent = curUi.copiedBtnLabel || '✓ Copied';
-          setTimeout(() => {
-            if (btn.isConnected) btn.textContent = uiText(getLang()).copyBtnLabel || 'Copy';
-          }, 1400);
-        } else if (act === 'refresh') {
-          Promise.all([fetchActiveConvo(cascadeId, true), fetchQuotaData(true)]).then(([fresh]) => {
-            if (openPopover === pop && pop.isConnected) {
-              renderContextPopoverContent(pop, fresh || data, cascadeId);
-              if (openPopoverAnchor) positionPopoverAboveAnchor(pop, openPopoverAnchor);
-            }
-          });
-        }
-      });
-    });
-
-    pop.querySelectorAll('[data-expand-group]').forEach((row) => {
-      row.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const gid = row.getAttribute('data-expand-group');
-        if (!gid) return;
-        if (expandedHudGroups.has(gid)) expandedHudGroups.delete(gid);
-        else expandedHudGroups.add(gid);
-        renderContextPopoverContent(pop, data, cascadeId);
-        if (openPopoverAnchor) positionPopoverAboveAnchor(pop, openPopoverAnchor);
-      });
-    });
-  }
-
-  function positionPopoverAboveAnchor(pop, anchor) {
-    if (!pop || !anchor) return;
-    const aRect = anchor.getBoundingClientRect();
-    const vw = window.innerWidth || 900;
-    const vh = window.innerHeight || 700;
-    const placeAbove = aRect.top >= 240 || aRect.top >= vh - aRect.bottom;
-    if (aRect.top >= 240) {
-      pop.style.maxHeight = Math.min(645, Math.max(220, Math.floor(aRect.top - 16))) + 'px';
-    } else if (!placeAbove) {
-      pop.style.maxHeight = Math.min(645, Math.max(180, Math.floor(vh - aRect.bottom - 16))) + 'px';
-    } else {
-      pop.style.maxHeight = Math.min(645, Math.max(180, Math.floor(aRect.top - 16))) + 'px';
-    }
-    const pRect = pop.getBoundingClientRect();
-    const popW = pop.offsetWidth || pop.clientWidth || pRect.width;
-    const maxCap = parseFloat(pop.style.maxHeight) || pRect.height;
-    const popH = Math.min(pop.offsetHeight || pRect.height, maxCap);
-    const left = Math.max(8, Math.min(vw - popW - 8, aRect.right - popW));
-    let top = placeAbove ? aRect.top - popH - 8 : aRect.bottom + 8;
-    if (placeAbove && top < 8) {
-      top = Math.max(8, Math.min(vh - popH - 8, aRect.bottom + 8));
-    } else if (!placeAbove && top + popH > vh - 8) {
-      top = Math.max(8, aRect.top - popH - 8);
-    }
-    pop.style.left = Math.round(left) + 'px';
-    pop.style.top = Math.round(Math.max(8, top)) + 'px';
-  }
-
-  function openContextPopover(anchor, data, initialTab) {
-    if (openPopover && openPopoverAnchor === anchor && (!initialTab || activeHudTab === initialTab)) {
-      closeContextPopover();
-      return;
-    }
-    closeContextPopover();
-    closeEffortPopover();
-    if (initialTab) activeHudTab = initialTab;
-    const inputBox = anchor?.closest?.('[data-testid="agent-input-box"]') || document.querySelector('[data-testid="agent-input-box"]');
-    const cascadeId = resolveCascadeId(inputBox);
-    openPopoverCascadeId = cascadeId;
-
-    const pop = document.createElement('div');
-    pop.className = 'ag-cs-ctx-popover';
-    pop.setAttribute('data-ag-no-i18n', '');
-    openPopover = pop;
-    openPopoverAnchor = anchor;
-    renderContextPopoverContent(pop, data, cascadeId);
-    document.body.appendChild(pop);
-    positionPopoverAboveAnchor(pop, anchor);
-
-    fetchQuotaData(false).then(() => {
-      if (openPopover === pop && pop.isConnected) {
-        const latest = activeTrajCache.get(cascadeId)?.data || data;
-        renderContextPopoverContent(pop, latest, cascadeId);
-        positionPopoverAboveAnchor(pop, anchor);
-      }
-    });
-  }
-
-  async function fetchActiveConvo(cascadeId, force = false) {
-    if (!cascadeId) return null;
+  async function fetchCrabActivity(cascadeId, force = false) {
+    if (!cascadeId || cfg.mascot !== 'crab') return null;
     const h = ensureHooks();
-    if (!h) return null;
-    const st = h.store.getState();
-    const allSummaries = st.trajectorySummaries?.summaries || st.cascadeTrajectorySummaries || {};
-    const sumEntry = allSummaries[cascadeId];
-    const sum = sumEntry?.summary || sumEntry || {};
-    const stepCount = Number(sum?.stepCount || 0);
-    const lastMod = Number(sum?.lastModifiedTime?.seconds || 0);
-    const running = !!(sum?.notFullyIdle || sum?.hasActivity || sum?.status === 2 || sum?.hasRunningSubagents);
-
-    // Discover child subagents belonging to this conversation
-    const childMetaList = [];
-    for (const [subId, rawEntry] of Object.entries(allSummaries)) {
-      if (subId === cascadeId) continue;
-      const s = rawEntry?.summary || rawEntry || {};
-      const meta = s.trajectoryMetadata || {};
-      if (meta.parentConversationId === cascadeId || meta.rootConversationId === cascadeId) {
-        childMetaList.push({
-          id: subId,
-          parentId: meta.parentConversationId || '',
-          rootId: meta.rootConversationId || '',
-          summary: s.summary || '',
-          stepCount: Number(s.stepCount || 0),
-          status: Number(s.status || 1),
-          createdAt: meta.createdAt || s.createdTime,
-        });
-      }
-    }
-
-    let entry = activeTrajCache.get(cascadeId);
+    if (!h || typeof h.svc?.getCascadeTrajectory !== 'function') return null;
+    const meta = readStoreSummaryMeta(h.store, cascadeId);
+    let entry = crabStatusCache.get(cascadeId);
     if (!entry) {
-      entry = { fetching: false, lastStep: -1, lastMod: -1, lastSubCount: -1, lastRunning: false, lastAt: 0, data: null };
-      activeTrajCache.set(cascadeId, entry);
+      entry = { fetching: false, lastStep: -1, lastMod: -1, lastRunning: false, lastAt: 0, status: null };
+      crabStatusCache.set(cascadeId, entry);
     }
-    if (entry.fetching) return entry.data;
+    if (entry.fetching) return entry.status;
     const now = Date.now();
-    const minMs = running ? 1000 : !entry.data || entry.data.calls === 0 ? 1500 : 3500;
+    const minMs = meta.running ? 1200 : !entry.status ? 1500 : 3500;
     const summaryChanged =
-      !entry.data ||
-      entry.lastStep !== stepCount ||
-      entry.lastMod !== lastMod ||
-      entry.lastSubCount !== childMetaList.length ||
-      entry.lastRunning !== running;
+      !entry.status ||
+      entry.lastStep !== meta.stepCount ||
+      entry.lastMod !== meta.lastMod ||
+      entry.lastRunning !== meta.running;
     if (!force) {
-      if (
-        !summaryChanged &&
-        entry.data.calls > 0 &&
-        !running &&
-        !entry.data.isRunning
-      ) {
-        return entry.data;
+      if (!summaryChanged && !meta.running && !entry.status.isRunning) {
+        return entry.status;
       }
-      if (!summaryChanged && now - entry.lastAt < minMs) return entry.data;
+      if (!summaryChanged && now - entry.lastAt < minMs) return entry.status;
     }
     entry.fetching = true;
     try {
       const res = await h.svc.getCascadeTrajectory({ cascadeId });
-      const analyzed = usageCore.analyzeActiveConversation(res, { cascadeId });
-      if (analyzed && analyzed.maxContextTokens > 0 && analyzed.hasActiveLimits && analyzed.lastModel) {
-        const mKey = normalizeModelCtxKey(analyzed.lastModel);
-        if (mKey) knownModelMaxCtx.set(mKey, analyzed.maxContextTokens);
-      }
-
-      if (childMetaList.length > 0 && typeof usageCore.attachSubagentSummaries === 'function') {
-        const subItems = await Promise.all(
-          childMetaList.slice(0, 12).map(async (cm) => {
-            const cachedSub = subagentTrajCache.get(cm.id);
-            if (cachedSub && cachedSub.stepCount === cm.stepCount && cachedSub.status === 1 && cm.status === 1) {
-              return { ...cm, analysis: cachedSub.analysis };
-            }
-            try {
-              const subRes = await h.svc.getCascadeTrajectory({ cascadeId: cm.id });
-              const subAnalysis = usageCore.analyzeActiveConversation(subRes, { cascadeId: cm.id });
-              subagentTrajCache.set(cm.id, {
-                stepCount: cm.stepCount,
-                status: cm.status,
-                analysis: subAnalysis,
-              });
-              return { ...cm, analysis: subAnalysis };
-            } catch {
-              return cm;
-            }
-          })
-        );
-        usageCore.attachSubagentSummaries(analyzed, subItems);
-      }
-
-      entry.data = analyzed;
-      entry.lastStep = stepCount;
-      entry.lastMod = lastMod;
-      entry.lastSubCount = childMetaList.length;
-      entry.lastRunning = running;
+      const nextStatus =
+        usageCore && typeof usageCore.inspectTrajectoryActivity === 'function'
+          ? usageCore.inspectTrajectoryActivity(res)
+          : { isRunning: false, isThinking: false, hasError: false };
+      entry.status = nextStatus;
+      entry.lastStep = meta.stepCount;
+      entry.lastMod = meta.lastMod;
+      entry.lastRunning = meta.running;
       entry.lastAt = Date.now();
     } catch {} finally {
       entry.fetching = false;
     }
-    return entry.data;
+    return entry.status;
   }
 
   // ── Pixel Crab Mascot Player ───────────────────────────────────────────
@@ -1927,6 +1226,8 @@
     if (crabState.stage.animation) crabState.stage.animation.cancel();
     if (crabState.root && crabState.root.parentElement) crabState.root.parentElement.removeChild(crabState.root);
     if (crabState.anchor) crabState.anchor.removeAttribute('data-ag-cs-crab-anchor');
+    document.querySelectorAll('.ag-cs-crab').forEach((n) => n.remove());
+    document.querySelectorAll('[data-ag-cs-crab-anchor]').forEach((el) => el.removeAttribute('data-ag-cs-crab-anchor'));
     crabState.root = null;
     crabState.sprite = null;
     crabState.strip = null;
@@ -1954,6 +1255,12 @@
       crabState.anchor = activeCard;
       needsStep = true;
     }
+    document.querySelectorAll('.ag-cs-crab').forEach((n) => {
+      if (n !== crabState.root) n.remove();
+    });
+    document.querySelectorAll('[data-ag-cs-crab-anchor]').forEach((el) => {
+      if (el !== activeCard) el.removeAttribute('data-ag-cs-crab-anchor');
+    });
     const now = Date.now();
     const isRunning = Boolean(activeInfo?.isRunning);
     if (crabState.wasRunning && !isRunning) {
@@ -1967,334 +1274,6 @@
       needsStep = true;
     }
     if (needsStep || !crabState.stage.current) stepCrab();
-  }
-
-  // ── Per-Turn Token Badges (.ag-cs-turn-bar) & Surround HUD Bars ────────
-  function clearTurnBadges() {
-    document.querySelectorAll('.ag-cs-turn-bar').forEach((n) => n.remove());
-  }
-
-  function extractFiberTurnContainer(el) {
-    let fEl = el;
-    for (let d = 0; d < 5 && fEl; d++) {
-      const fk = Object.keys(fEl).find((k) => k.startsWith('__reactFiber$'));
-      let f = fk ? fEl[fk] : null;
-      for (let fd = 0; fd < 15 && f; fd++) {
-        const p = f.memoizedProps || f.pendingProps;
-        if (p && p.container && Array.isArray(p.container.steps)) {
-          return { container: p.container, cascadeId: p.cascadeId || '' };
-        }
-        f = f.return;
-      }
-      fEl = fEl.parentElement;
-    }
-    return null;
-  }
-
-  function summarizeFiberSteps(steps, fallbackModel, prevCtxUsed) {
-    let ctxUsed = 0;
-    let outSum = 0;
-    let thinkSum = 0;
-    let lastIn = 0;
-    let lastCr = 0;
-    let toolCalls = 0;
-    let llmCalls = 0;
-    for (const s of steps) {
-      const sc = s?.step?.case;
-      const mu = s?.metadata?.modelUsage || s?.step?.value?.metadata?.modelUsage;
-      if (mu) {
-        const inp = Number(mu.inputTokens || 0);
-        const cr = Number(mu.cacheReadTokens || 0);
-        const out = Number(mu.outputTokens || 0);
-        if (inp + cr > 0) {
-          ctxUsed = inp + cr;
-          lastIn = inp;
-          lastCr = cr;
-          llmCalls++;
-        }
-        outSum += out;
-      }
-      if (sc === 'plannerResponse') {
-        const th = s?.step?.value?.thinking || '';
-        if (th && typeof usageCore.estimateTextTokens === 'function') {
-          thinkSum += usageCore.estimateTextTokens(th).tokens;
-        }
-      } else if (sc && sc !== 'userInput' && sc !== 'systemMessage' && sc !== 'checkpoint') {
-        toolCalls++;
-      }
-    }
-    const promptTot = lastIn + lastCr;
-    const cacheHitPct = promptTot > 0 ? Math.round((lastCr / promptTot) * 100) : 0;
-    const ctxDelta = prevCtxUsed > 0 && ctxUsed > 0 ? ctxUsed - prevCtxUsed : ctxUsed;
-    return {
-      model: fallbackModel || 'Model',
-      ctxUsed,
-      ctxDelta,
-      output: outSum,
-      thinking: thinkSum,
-      toolCalls,
-      calls: llmCalls,
-      speed: 0,
-      cacheHitPct,
-      subagentCount: 0,
-      subagentCalls: 0,
-      subagentTokens: 0,
-    };
-  }
-
-  function syncTurnBadges(data) {
-    if (cfg.turnBadges === false || !data || !Array.isArray(data.turnDetails) || data.turnDetails.length === 0) {
-      clearTurnBadges();
-      return;
-    }
-    const lang = getLang();
-    const ui = uiText(lang);
-    const cv = document.querySelector('[data-testid="conversation-view"]');
-    if (!cv) {
-      clearTurnBadges();
-      return;
-    }
-    const allResps = Array.from(cv.querySelectorAll('[data-testid="agent-response"]'));
-    if (allResps.length === 0) {
-      clearTurnBadges();
-      return;
-    }
-
-    // Group responses by their cascadeId (main conversation vs subagent preview pane)
-    const mainTargets = [];
-    const otherTargets = [];
-    const seenHosts = new Set();
-    for (const resp of allResps) {
-      const host = resp.closest('[data-turn-content]') || resp.parentElement || resp;
-      if (seenHosts.has(host)) continue;
-      seenHosts.add(host);
-      const fiberInfo = extractFiberTurnContainer(resp);
-      const item = { host, resp, fiberInfo };
-      if (!fiberInfo || !fiberInfo.cascadeId || !data.cascadeId || fiberInfo.cascadeId === data.cascadeId) {
-        mainTargets.push(item);
-      } else {
-        otherTargets.push(item);
-      }
-    }
-
-    const turns = data.turnDetails;
-    const activeSet = new Set();
-
-    const renderBadgeOnHost = (host, t) => {
-      if (!host || !t) return;
-      let bar = host.querySelector(':scope > .ag-cs-turn-bar') || host.querySelector('.ag-cs-turn-bar');
-      if (!bar) {
-        bar = document.createElement('div');
-        bar.className = 'ag-cs-turn-bar';
-        bar.setAttribute('data-ag-no-i18n', '');
-        bar.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          const latest = activeTrajCache.get(data.cascadeId)?.data || data;
-          openContextPopover(bar, latest, 'turns');
-        });
-        host.appendChild(bar);
-      }
-      activeSet.add(bar);
-
-      const dSign = t.ctxDelta >= 0 ? '+' : '';
-      const dCls = t.ctxDelta >= 15000 ? 'is-high' : t.ctxDelta >= 5000 ? 'is-mid' : 'is-low';
-      const shortModel = String(t.model || data.lastModel || '').replace(/\s*\([^)]*\)\s*/g, '').trim() || 'Model';
-      const barKey = `${t.turn}|${t.ctxUsed}|${t.ctxDelta}|${t.output}|${t.thinking}|${t.toolCalls || 0}|${t.speed}|${t.cacheHitPct}|${t.subagentCalls}|${lang}`;
-      if (bar.getAttribute('data-ag-cs-turn-key') !== barKey) {
-        bar.setAttribute('data-ag-cs-turn-key', barKey);
-        bar.innerHTML = `
-          <span class="ag-cs-tb-idx">#T${t.turn}</span>
-          <span class="ag-cs-tb-model">${escapeHtml(shortModel)}</span>
-          <span class="ag-cs-tb-sep">·</span>
-          <span class="ag-cs-tb-item">${escapeHtml(ui.ctxShort || 'Ctx')} <strong>${formatCompactK(t.ctxUsed)}</strong></span>
-          <span class="ag-cs-tb-delta ${dCls}">${dSign}${formatCompactK(t.ctxDelta)}</span>
-          <span class="ag-cs-tb-sep">·</span>
-          <span class="ag-cs-tb-item">${escapeHtml(ui.outShort || 'Out')} <strong>${formatCompactK(t.output)}</strong></span>
-          ${t.thinking > 0 ? `<span class="ag-cs-tb-item is-think">${escapeHtml(ui.thinkShort || 'Think')} ${formatCompactK(t.thinking)}</span>` : ''}
-          ${t.toolCalls > 0 ? `<span class="ag-cs-tb-item">🔧 ×${t.toolCalls}</span>` : ''}
-          ${t.subagentCalls > 0 ? `<span class="ag-cs-tb-sub">🤖 ×${t.subagentCount || t.subagentCalls} (${formatCompactK(t.subagentTokens)})</span>` : ''}
-          ${t.speed > 0 ? `<span class="ag-cs-tb-item">⚡ ${t.speed} tok/s</span>` : ''}
-          <span class="ag-cs-tb-item">${escapeHtml(ui.cacheShort || 'Cache')} ${t.cacheHitPct}%</span>
-        `;
-      }
-    };
-
-    const count = Math.min(mainTargets.length, turns.length);
-    for (let i = 0; i < count; i++) {
-      const target = mainTargets[mainTargets.length - count + i];
-      const t = turns[turns.length - count + i];
-      if (!target || !t) continue;
-      renderBadgeOnHost(target.host, t);
-    }
-
-    // Also render badges for any subagent conversation turns visible in DOM
-    let prevSubCtx = 0;
-    for (let i = 0; i < otherTargets.length; i++) {
-      const target = otherTargets[i];
-      const steps = target.fiberInfo?.container?.steps;
-      if (Array.isArray(steps) && steps.length > 0) {
-        const fb = summarizeFiberSteps(steps, data.lastModel, prevSubCtx);
-        if (fb.ctxUsed > 0 || fb.output > 0) {
-          prevSubCtx = fb.ctxUsed;
-          renderBadgeOnHost(target.host, { ...fb, turn: i + 1 });
-        }
-      }
-    }
-
-    document.querySelectorAll('.ag-cs-turn-bar').forEach((b) => {
-      if (!activeSet.has(b)) b.remove();
-    });
-  }
-
-  function syncSurroundHud(card, footer, data) {
-    const inputBox = card?.closest?.('[data-testid="agent-input-box"]');
-    const composerShell = card?.closest?.('#antigravity\\.agentSidePanelInputBox') || card?.parentElement;
-    if (!inputBox || !card) return;
-    const d = data || createEmptyConvoData('', getKnownMaxContextForCard(card, data));
-    const lang = getLang();
-    const ui = uiText(lang);
-    const { ring, draftEst, activeQuota } = getRingTelemetryForCard(card, d);
-    const totalW = ring.maxTokens || 256000;
-    const pctOf = (v) => Math.max(0, Math.min(100, ((Number(v) || 0) / totalW) * 100)).toFixed(2);
-    const chatMsgs =
-      d.chatMsgTokens != null ? d.chatMsgTokens : Math.max(0, Number(d.msgTokens || 0) - Number(d.toolResultsTokens || 0));
-    const topSpeed = Number(d.displaySpeed || d.lastSpeed || 0);
-
-    // 1. Top HUD Bar (.ag-cs-hud-top-bar)
-    let topBar = card.querySelector('.ag-cs-hud-top-bar');
-    if (cfg.hudTopBar === true) {
-      if (!topBar) {
-        topBar = document.createElement('div');
-        topBar.className = 'ag-cs-hud-top-bar';
-        topBar.setAttribute('data-ag-no-i18n', '');
-        topBar.addEventListener('click', (ev) => {
-          if (ev.target && ev.target.closest && ev.target.closest('[data-hud-compact-btn]')) return;
-          ev.stopPropagation();
-          openContextPopover(topBar, resolveCardConvoData(card, d), 'breakdown');
-        });
-        card.insertBefore(topBar, card.firstChild);
-      }
-      const topKey = `${ring.pctRound}|${ring.remainingTokens}|${ring.usedTokens}|${chatMsgs}|${draftEst.tokens}|${d.cacheHitPct}|${topSpeed}|${lang}`;
-      if (topBar.getAttribute('data-ag-cs-top-key') !== topKey) {
-        topBar.setAttribute('data-ag-cs-top-key', topKey);
-        topBar.innerHTML = `
-          <div class="ag-cs-hud-top-track">
-            <span style="width:${pctOf(d.sysTokens)}%;background:#3b82f6"></span>
-            <span style="width:${pctOf(d.toolsTokens)}%;background:#a855f7"></span>
-            <span style="width:${pctOf(chatMsgs)}%;background:#10b981"></span>
-            <span style="width:${pctOf(d.toolResultsTokens)}%;background:#f59e0b"></span>
-            <span style="width:${pctOf(draftEst.tokens)}%;background:#ec4899"></span>
-          </div>
-          <div class="ag-cs-hud-top-row">
-            <span class="ag-cs-hud-rem" style="color:${ring.color}">${escapeHtml(ui.remShort || 'Rem')} ${ring.pctRound}% (${formatCompactK(ring.remainingTokens)} / ${formatCompactK(totalW)})</span>
-            <span>${escapeHtml(ui.usedWord || 'Used')} ${formatCompactK(ring.usedTokens)}${draftEst.tokens > 0 ? ` +${formatCompactK(draftEst.tokens)}` : ''}</span>
-            <span>${escapeHtml(ui.cacheShort || 'Cache')} ${Math.round(d.cacheHitPct || 0)}%</span>
-            ${topSpeed > 0 ? `<span>⚡ ${topSpeed} tok/s</span>` : ''}
-            <button type="button" class="ag-cs-hud-compact-btn" data-hud-compact-btn="1">/compact</button>
-          </div>
-        `;
-        const cBtn = topBar.querySelector('[data-hud-compact-btn]');
-        if (cBtn) {
-          cBtn.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            fillCompactCommand();
-          });
-        }
-      }
-    } else if (topBar) {
-      topBar.remove();
-    }
-
-    // 2. Bottom HUD Bar (.ag-cs-hud-bottom-bar)
-    let botBar = card.querySelector('.ag-cs-hud-bottom-bar');
-    if (cfg.hudBottomBar === true) {
-      if (!botBar) {
-        botBar = document.createElement('div');
-        botBar.className = 'ag-cs-hud-bottom-bar';
-        botBar.setAttribute('data-ag-no-i18n', '');
-        botBar.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          openContextPopover(botBar, resolveCardConvoData(card, d), 'turns');
-        });
-        card.appendChild(botBar);
-      }
-      const qPct = activeQuota && typeof activeQuota.effectiveRemainingPct === 'number' ? `${Math.round(activeQuota.effectiveRemainingPct)}%` : '';
-      const botKey = `${d.totalTokens}|${d.turns}|${d.calls}|${d.totalOutput}|${d.subagentTokens}|${qPct}|${lang}`;
-      if (botBar.getAttribute('data-ag-cs-bot-key') !== botKey) {
-        botBar.setAttribute('data-ag-cs-bot-key', botKey);
-        botBar.innerHTML = `
-          <span>${escapeHtml(ui.sessionThroughput || 'Session')} <strong>${formatCompactK(d.totalTokens)}</strong></span>
-          <span>${d.turns || d.calls} ${escapeHtml(ui.turnsUnit || 'turns')} / ${d.calls} ${escapeHtml(ui.callsUnit || 'calls')}</span>
-          <span>${escapeHtml(ui.outShort || 'Out')} ${formatCompactK(d.totalOutput || 0)}</span>
-          ${d.subagentCount > 0 ? `<span>🤖 ×${d.subagentCount} (${formatCompactK(d.subagentTokens)})</span>` : ''}
-          ${qPct ? `<span>${escapeHtml(ui.modelQuotaRem || 'Quota Rem')} <strong>${qPct}</strong></span>` : ''}
-        `;
-      }
-    } else if (botBar) {
-      botBar.remove();
-    }
-
-    // 3. Rim Progress Border (data-ag-cs-rim on composerShell + proportional .ag-cs-hud-rim-progress)
-    let rimBar = card.querySelector('.ag-cs-hud-rim-progress');
-    if (cfg.hudRimProgress === true) {
-      if (composerShell) {
-        composerShell.setAttribute('data-ag-cs-rim', '1');
-        composerShell.style.setProperty('--ag-cs-rim-pct', `${ring.pct.toFixed(1)}%`);
-        composerShell.style.setProperty('--ag-cs-rim-color', ring.color);
-      }
-      const rimHost = card.querySelector(':scope > div.relative.w-full') || card;
-      if (rimHost) {
-        if (!rimBar || rimBar.parentElement !== rimHost) {
-          rimBar?.remove();
-          rimBar = document.createElement('div');
-          rimBar.className = 'ag-cs-hud-rim-progress';
-          rimBar.setAttribute('aria-hidden', 'true');
-          rimBar.setAttribute('data-ag-no-i18n', '');
-          const fill = document.createElement('span');
-          fill.className = 'ag-cs-hud-rim-fill';
-          rimBar.appendChild(fill);
-          rimHost.appendChild(rimBar);
-        }
-        const fill = rimBar.firstElementChild;
-        if (fill) {
-          const usedPct = Math.max(2, Math.min(100, 100 - ring.pct));
-          fill.style.width = `${usedPct.toFixed(1)}%`;
-          fill.style.background = ring.color;
-        }
-      }
-    } else {
-      if (composerShell && composerShell.hasAttribute('data-ag-cs-rim')) {
-        composerShell.removeAttribute('data-ag-cs-rim');
-        composerShell.style.removeProperty('--ag-cs-rim-pct');
-        composerShell.style.removeProperty('--ag-cs-rim-color');
-      }
-      if (rimBar) rimBar.remove();
-    }
-
-    // 4. Footer Chip (.ag-cs-hud-footer-chip)
-    if (footer) {
-      let chip = footer.querySelector('.ag-cs-hud-footer-chip');
-      if (cfg.hudFooterChip === true) {
-        if (!chip) {
-          chip = document.createElement('button');
-          chip.type = 'button';
-          chip.className = 'ag-cs-hud-footer-chip';
-          chip.setAttribute('data-ag-no-i18n', '');
-          chip.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            openContextPopover(chip, resolveCardConvoData(card, d), 'quotas');
-          });
-          footer.appendChild(chip);
-        }
-        const chipTxt = `${ui.remShort || 'Rem'} ${ring.pctRound}% (${formatCompactK(ring.remainingTokens)})`;
-        if (chip.textContent !== chipTxt) {
-          chip.textContent = chipTxt;
-          chip.style.setProperty('--ag-cs-chip-color', ring.color);
-        }
-      } else if (chip) {
-        chip.remove();
-      }
-    }
   }
 
   // ── Interactive Thinking Effort Slider Popover (Claude Code & ChatGPT Performance) ──
@@ -3333,7 +2312,6 @@
       return;
     }
     closeEffortPopover();
-    closeContextPopover();
 
     const pop = document.createElement('div');
     pop.className = 'ag-cs-effort-popover';
@@ -3716,161 +2694,39 @@
         }
       }
 
-      // 3. Inline stats, remaining-usage ring, turn badges & surround HUD (both new conversations & active chats)
-      const footer = card.querySelector('.agy-composer-footer');
-      const inConvo = Boolean(card.closest('[data-testid="conversation-view"]'));
-      const cascadeId = inConvo ? resolveCascadeId(inputBox) : '';
-
-      if (!footer || cfg.inlineStats === false || cfg.composerRestyle === false) {
-        card
-          .querySelectorAll('.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip')
-          .forEach((n) => n.remove());
-        continue;
+      // 3. Remove any residual HUD badges and feed lightweight Clawd activity probe when enabled
+      card
+        .querySelectorAll('.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip')
+        .forEach((n) => n.remove());
+      const composerShell = card.closest?.('#antigravity\\.agentSidePanelInputBox') || card.parentElement;
+      if (composerShell && composerShell.hasAttribute('data-ag-cs-rim')) {
+        composerShell.removeAttribute('data-ag-cs-rim');
+        composerShell.style.removeProperty('--ag-cs-rim-pct');
+        composerShell.style.removeProperty('--ag-cs-rim-color');
       }
 
-      const cached = inConvo && cascadeId ? activeTrajCache.get(cascadeId)?.data || null : null;
-      const baseData = cached || createEmptyConvoData(cascadeId, getKnownMaxContextForCard(card, null));
-      if (card === primaryCard) activeInfoForCrab = cached;
-
-      if (inConvo && cascadeId) {
-        fetchActiveConvo(cascadeId).then((fresh) => {
-          if (!destroyed && fresh && card.isConnected) {
-            updateFooterWidgets(card, footer, fresh);
-            syncSurroundHud(card, footer, fresh);
-            if (card === primaryCard) {
+      if (cfg.mascot === 'crab' && card === primaryCard) {
+        const inConvo = Boolean(card.closest('[data-testid="conversation-view"]'));
+        const cascadeId = inConvo ? resolveCascadeId(inputBox) : '';
+        if (inConvo && cascadeId) {
+          const cached = crabStatusCache.get(cascadeId)?.status || null;
+          const h = ensureHooks(true);
+          const meta = h?.store ? readStoreSummaryMeta(h.store, cascadeId) : null;
+          activeInfoForCrab =
+            cached ||
+            (meta && meta.running ? { isRunning: true, isThinking: false, hasError: false } : null);
+          fetchCrabActivity(cascadeId).then((fresh) => {
+            if (!destroyed && fresh && card.isConnected) {
               syncCrab(primaryCard, fresh);
-              syncTurnBadges(fresh);
-            }
-            if (fresh !== cached && openPopover && openPopover.isConnected && openPopoverCascadeId === cascadeId) {
-              renderContextPopoverContent(openPopover, fresh, cascadeId);
-              if (openPopoverAnchor && openPopoverAnchor.isConnected) {
-                positionPopoverAboveAnchor(openPopover, openPopoverAnchor);
-              }
-            }
-          }
-        });
-      }
-      if (cfg.ringMode === 'quota') {
-        const needQuotaRefresh = !cachedQuotaData || Date.now() - lastQuotaFetchAt >= 25000;
-        const qProm = fetchQuotaData(false);
-        if (needQuotaRefresh && qProm && typeof qProm.then === 'function') {
-          qProm.then((q) => {
-            if (!destroyed && q && card.isConnected) {
-              const latest = resolveCardConvoData(card, baseData);
-              updateFooterWidgets(card, footer, latest);
-              syncSurroundHud(card, footer, latest);
             }
           });
         }
       }
-      updateFooterWidgets(card, footer, baseData);
-      syncSurroundHud(card, footer, baseData);
-      if (card === primaryCard) syncTurnBadges(cached);
     }
 
+    document.querySelectorAll('.ag-cs-turn-bar, .ag-cs-ctx-popover').forEach((n) => n.remove());
     syncCrab(primaryCard, activeInfoForCrab);
     syncSmoothCaret(false);
-  }
-
-  function updateFooterWidgets(card, footer, data) {
-    const lang = getLang();
-    const ui = uiText(lang);
-    const d = data || createEmptyConvoData('', getKnownMaxContextForCard(card, data));
-    card._agCsLastData = d;
-    let statsBtn = footer.querySelector('.ag-cs-inline-stats');
-    let ringBtn = footer.querySelector('.ag-cs-context-ring');
-
-    // Bottom-right circular ring displays REMAINING capacity percentage (usageCore.computeRingTelemetry)
-    const { ring, draftEst } = getRingTelemetryForCard(card, d);
-
-    const turnsTxt = `${d.calls} ${ui.callsShortUnit || 'calls'} ${d.steps} ${ui.stepsUnit || 'steps'}`;
-    const speedVal = Number(d.displaySpeed || d.lastSpeed || 0);
-    const speedTxt = speedVal > 0 ? ` · ${speedVal} tok/s` : '';
-    const totalTxt =
-      d.totalTokens > 0
-        ? ` · ${usageCore.formatCompactTokens(d.totalTokens)} tok`
-        : d.liveTokens > 0
-        ? ` · ~${usageCore.formatCompactTokens(d.liveTokens)} tok`
-        : draftEst.tokens > 0
-        ? ` · ~${usageCore.formatCompactTokens(draftEst.tokens)} tok`
-        : ' · 0 tok';
-    const cacheTxt = ` · ${Math.round(d.cacheHitPct || 0)}% ${ui.cacheShort || 'Cache'}`;
-    const statsKey = `${turnsTxt}|${speedTxt}|${totalTxt}|${cacheTxt}|${lang}`;
-
-    if (!statsBtn) {
-      statsBtn = document.createElement('button');
-      statsBtn.type = 'button';
-      statsBtn.className = 'ag-cs-inline-stats';
-      statsBtn.setAttribute('data-ag-no-i18n', '');
-      for (const cls of ['ag-cs-stat-turns', 'ag-cs-stat-speed', 'ag-cs-stat-total', 'ag-cs-stat-cache']) {
-        const sp = document.createElement('span');
-        sp.className = cls;
-        statsBtn.appendChild(sp);
-      }
-      statsBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        openContextPopover(statsBtn, resolveCardConvoData(card, d), 'breakdown');
-      });
-      footer.appendChild(statsBtn);
-    }
-
-    if (statsBtn.getAttribute('data-ag-cs-stats-key') !== statsKey) {
-      statsBtn.setAttribute('data-ag-cs-stats-key', statsKey);
-      const turnsEl = statsBtn.querySelector('.ag-cs-stat-turns');
-      const speedEl = statsBtn.querySelector('.ag-cs-stat-speed');
-      const totalEl = statsBtn.querySelector('.ag-cs-stat-total');
-      const cacheEl = statsBtn.querySelector('.ag-cs-stat-cache');
-      if (turnsEl) turnsEl.textContent = turnsTxt;
-      if (speedEl) {
-        speedEl.textContent = speedTxt;
-        speedEl.style.display = speedTxt ? '' : 'none';
-      }
-      if (totalEl) totalEl.textContent = totalTxt;
-      if (cacheEl) cacheEl.textContent = cacheTxt;
-    }
-
-    const pct = Math.max(0, Math.min(100, ring.pct));
-    const r = 5.5;
-    const circ = 2 * Math.PI * r;
-    const dash = ((pct / 100) * circ).toFixed(2);
-    const color = ring.color;
-    const pctRound = ring.pctRound;
-    const remStr = formatCompactK(ring.remainingTokens);
-    const maxStr = formatCompactK(ring.maxTokens);
-    const usedStr = formatCompactK(ring.usedTokens);
-    const ringTitle =
-      typeof ui.ringTooltip === 'function'
-        ? ui.ringTooltip(remStr, maxStr, ring.contextRemainingPct.toFixed(1), usedStr, ring.contextUsedPct.toFixed(1), ring.quotaRemainingPct)
-        : `Remaining ${remStr} / ${maxStr} (${ring.contextRemainingPct.toFixed(1)}%) · Used ${usedStr} (${ring.contextUsedPct.toFixed(1)}%)`;
-    const ringKey = `${ring.mode}|${pctRound}|${dash}|${color}|${ringTitle}`;
-
-    if (!ringBtn) {
-      ringBtn = document.createElement('button');
-      ringBtn.type = 'button';
-      ringBtn.className = 'ag-cs-context-ring';
-      ringBtn.setAttribute('data-ag-no-i18n', '');
-      ringBtn.setAttribute('data-ring-mode', ring.mode);
-      ringBtn.setAttribute('title', ringTitle);
-      ringBtn.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="${r}" fill="none" stroke="var(--ag-cs-heat-empty)" stroke-width="2.2"/><circle class="ag-cs-ring-fill" cx="8" cy="8" r="${r}" fill="none" stroke="${color}" stroke-width="2.2" stroke-dasharray="${dash} ${circ.toFixed(2)}" stroke-linecap="round"/></svg><span>${pctRound}%</span>`;
-      ringBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        const targetTab = cfg.ringMode === 'quota' ? 'quotas' : 'breakdown';
-        openContextPopover(ringBtn, resolveCardConvoData(card, d), targetTab);
-      });
-      footer.appendChild(ringBtn);
-      ringBtn.setAttribute('data-ag-cs-ring-key', ringKey);
-    } else if (ringBtn.getAttribute('data-ag-cs-ring-key') !== ringKey) {
-      ringBtn.setAttribute('data-ag-cs-ring-key', ringKey);
-      ringBtn.setAttribute('data-ring-mode', ring.mode);
-      ringBtn.setAttribute('title', ringTitle);
-      const fillCircle = ringBtn.querySelector('.ag-cs-ring-fill');
-      const pctSpan = ringBtn.querySelector('span');
-      if (fillCircle) {
-        fillCircle.setAttribute('stroke', color);
-        fillCircle.setAttribute('stroke-dasharray', `${dash} ${circ.toFixed(2)}`);
-      }
-      if (pctSpan) pctSpan.textContent = `${pctRound}%`;
-    }
   }
 
   // ── Settings Panel Integration ─────────────────────────────────────────
@@ -3896,7 +2752,6 @@
         else row.removeAttribute('data-ag-cs-dim');
       });
     };
-    let wasHudOpen = false;
     const existing = document.getElementById(SETTINGS_SEC_ID);
     if (existing) {
       if (panel.querySelector('#' + SETTINGS_SEC_ID) === existing && existing.getAttribute('data-ag-cs-lang') === lang) {
@@ -3913,8 +2768,6 @@
         syncCondDims(existing);
         return;
       }
-      const prevDetails = existing.querySelector('.ag-cs-settings-details');
-      wasHudOpen = Boolean(prevDetails && (prevDetails.open || prevDetails.hasAttribute('open')));
       existing.remove();
     }
     const sections = Array.from(panel.querySelectorAll('div.space-y-2')).filter(
@@ -3987,6 +2840,15 @@
           [false, ui.offLabel || 'Off'],
         ],
       },
+      sidebarCompact: {
+        key: 'sidebarCompact',
+        title: ui.setSidebarCompactTitle || 'Compact Sidebar',
+        desc: ui.setSidebarCompactDesc || 'Tighten sidebar row height and spacing to fit more items.',
+        opts: [
+          [true, ui.onLabel || 'On'],
+          [false, ui.offLabel || 'Off'],
+        ],
+      },
       composerRestyle: {
         key: 'composerRestyle',
         title: ui.setComposerTitle || 'Composer Restyle',
@@ -3994,6 +2856,15 @@
         opts: [
           [true, ui.onLabel || 'On'],
           [false, ui.offLabel || 'Off'],
+        ],
+      },
+      placeholderStyle: {
+        key: 'placeholderStyle',
+        title: ui.setPlaceholderStyleTitle || 'Composer Placeholder',
+        desc: ui.setPlaceholderStyleDesc || 'Show Studio placeholder prompt or keep native host copy.',
+        opts: [
+          ['studio', ui.optPlaceholderStudio || 'Studio'],
+          ['host', ui.optPlaceholderHost || 'Host'],
         ],
       },
       effortSliderStyle: {
@@ -4058,96 +2929,18 @@
           [false, ui.offLabel || 'Off'],
         ],
       },
-      inlineStats: {
-        key: 'inlineStats',
-        title: ui.setInlineStatsTitle || 'Inline Stats & Remaining Ring',
-        desc: ui.setInlineStatsDesc || 'Show inline session stats & remaining capacity ring.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      ringMode: {
-        key: 'ringMode',
-        title: ui.setRingModeTitle || 'Bottom-Right Ring Mode',
-        desc: ui.setRingModeDesc || 'Display Context Remaining % or Model Quota Remaining %.',
-        opts: [
-          ['context', ui.optRingContext || 'Context Rem %'],
-          ['quota', ui.optRingQuota || 'Quota Rem %'],
-        ],
-      },
-      turnBadges: {
-        key: 'turnBadges',
-        title: ui.setTurnBadgesTitle || 'Per-Turn Token Badges',
-        desc: ui.setTurnBadgesDesc || 'Render per-turn token telemetry badges in conversation.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      hudTopBar: {
-        key: 'hudTopBar',
-        title: ui.setHudTopBarTitle || 'Composer Top HUD Bar',
-        desc: ui.setHudTopBarDesc || 'Show context progress bar above composer.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      hudBottomBar: {
-        key: 'hudBottomBar',
-        title: ui.setHudBottomBarTitle || 'Composer Bottom HUD Bar',
-        desc: ui.setHudBottomBarDesc || 'Show detailed HUD telemetry bar below composer.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      hudRimProgress: {
-        key: 'hudRimProgress',
-        title: ui.setHudRimTitle || 'Composer Rim Progress',
-        desc: ui.setHudRimDesc || 'Render context usage rim progress around composer.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      hudFooterChip: {
-        key: 'hudFooterChip',
-        title: ui.setHudChipTitle || 'Footer Remaining Chip',
-        desc: ui.setHudChipDesc || 'Show remaining context/quota chip in composer footer.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
-      hudCompact: {
-        key: 'hudCompact',
-        title: ui.setHudCompactTitle || 'Compact HUD Mode',
-        desc: ui.setHudCompactDesc || 'Use compact padding and condensed typography for Token HUD.',
-        opts: [
-          [true, ui.onLabel || 'On'],
-          [false, ui.offLabel || 'Off'],
-        ],
-      },
     };
 
     const groups = [
       {
         id: 'appearance',
         title: ui.grpAppearance || 'Appearance & Layout',
-        keys: ['language', 'homeLayout', 'palette', 'logoInk', 'sidebarRestyle', 'composerRestyle'],
+        keys: ['language', 'homeLayout', 'palette', 'logoInk', 'sidebarRestyle', 'sidebarCompact', 'composerRestyle', 'placeholderStyle'],
       },
       {
         id: 'interaction',
         title: ui.grpInteraction || 'Slider, Caret & Mascot',
         keys: ['effortSliderStyle', 'effortAccent', 'performanceBackdrop', 'smoothCaret', 'mascot', 'homeRipple'],
-      },
-      {
-        id: 'telemetry',
-        title: ui.grpTelemetry || 'Usage Ring & HUD',
-        keys: ['inlineStats', 'ringMode', 'turnBadges'],
-        hudKeys: ['hudTopBar', 'hudBottomBar', 'hudRimProgress', 'hudFooterChip', 'hudCompact'],
       },
     ];
 
@@ -4240,29 +3033,6 @@
       for (const k of grp.keys) {
         if (rowDefs[k]) list.appendChild(buildRow(rowDefs[k]));
       }
-      if (Array.isArray(grp.hudKeys) && grp.hudKeys.length > 0) {
-        const details = mkEl('details', 'ag-cs-settings-details');
-        const anyHudActive = grp.hudKeys.some((hk) => cfg[hk] === true);
-        if (wasHudOpen || anyHudActive) {
-          details.open = true;
-          details.setAttribute('open', '');
-        }
-        const summary = mkEl('summary', 'ag-cs-settings-summary');
-        const sumLabel = mkEl('span', 'ag-cs-settings-summary-label');
-        sumLabel.textContent = ui.hudSummaryLabel || 'Composer Surround HUD (Optional)';
-        const sumMeta = mkEl('span', 'ag-cs-settings-summary-meta');
-        sumMeta.textContent = typeof ui.hudSummaryMeta === 'function' ? ui.hudSummaryMeta(grp.hudKeys.length) : `${grp.hudKeys.length} options`;
-        summary.appendChild(sumLabel);
-        summary.appendChild(sumMeta);
-        details.appendChild(summary);
-
-        const bodyWrap = mkEl('div', 'ag-cs-settings-details-body divide-y divide-border');
-        for (const hk of grp.hudKeys) {
-          if (rowDefs[hk]) bodyWrap.appendChild(buildRow(rowDefs[hk]));
-        }
-        details.appendChild(bodyWrap);
-        list.appendChild(details);
-      }
       grpEl.appendChild(list);
       groupsWrap.appendChild(grpEl);
     }
@@ -4293,7 +3063,7 @@
     if (!el || !el.closest) return false;
     return Boolean(
       el.closest(
-        '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-crab, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-footer-chip, #' +
+        '.ag-cs-home-panel-seat, .ag-cs-ripple-host, .ag-cs-crab, .ag-cs-effort-popover, .ag-cs-perf-backdrop, .ag-cs-smooth-caret, #ag-usage-monitor-capsule, #ag-usage-monitor-portal, #' +
           SETTINGS_SEC_ID +
           ', #ag-claude-style-css'
       )
@@ -4302,9 +3072,6 @@
 
   function runSync() {
     if (destroyed) return;
-    if (openPopover && (!openPopover.isConnected || !openPopoverAnchor || !openPopoverAnchor.isConnected)) {
-      closeContextPopover();
-    }
     if (openEffortPop && (!openEffortPop.isConnected || !openEffortAnchor || !openEffortAnchor.isConnected)) {
       closeEffortPopover();
     }
@@ -4363,9 +3130,6 @@
       ev.preventDefault();
       return;
     }
-    if (openPopover && !openPopover.contains(ev.target) && (!openPopoverAnchor || !openPopoverAnchor.contains(ev.target))) {
-      closeContextPopover();
-    }
     if (openEffortPop && !openEffortPop.contains(ev.target) && (!openEffortAnchor || !openEffortAnchor.contains(ev.target))) {
       closeEffortPopover();
     }
@@ -4407,7 +3171,6 @@
 
   function onDocKeyDown(ev) {
     if (ev.key === 'Escape') {
-      if (openPopover) closeContextPopover();
       if (openEffortPop) closeEffortPopover();
     }
   }
@@ -4421,11 +3184,6 @@
       if (ev?.target?.closest && ev.target.closest('[data-testid="agent-input-box"]')) {
         scheduleSync();
       }
-      if (openPopover && openPopover.isConnected) {
-        const latest = activeTrajCache.get(openPopoverCascadeId)?.data || openPopoverAnchor?.closest?.('.surface-composer-card')?._agCsLastData || null;
-        renderContextPopoverContent(openPopover, latest, openPopoverCascadeId);
-        if (openPopoverAnchor) positionPopoverAboveAnchor(openPopover, openPopoverAnchor);
-      }
     }
   }
 
@@ -4437,9 +3195,6 @@
 
   function onWindowResize() {
     if (destroyed) return;
-    if (openPopover && openPopover.isConnected && openPopoverAnchor && openPopoverAnchor.isConnected) {
-      positionPopoverAboveAnchor(openPopover, openPopoverAnchor);
-    }
     if (openEffortPop && openEffortPop.isConnected) {
       positionEffortPopover(openEffortPop, openEffortAnchor || openEffortModelBtn);
       if (typeof openEffortPop._syncEffortKnob === 'function') {
@@ -4559,7 +3314,7 @@
     codeHash: CODE_HASH,
     refreshConfig(next) {
       if (next && typeof next === 'object') {
-        cfg = loadSettings({ ...initialConfig, ...next });
+        cfg = loadSettings({ ...initialConfig, ...next }, { preferBase: true });
       } else {
         try {
           const saved = JSON.parse(localStorage.getItem(STORAGE_SETTINGS_KEY) || '{}');
@@ -4576,21 +3331,6 @@
       const m = modelBtn || b?.closest?.('[data-testid="model-selector-trigger"]') || document.querySelector('[data-testid="model-selector-trigger"]');
       openEffortPopover(b, m);
     },
-    openContextPopover(anchorEl, tab) {
-      const cands = Array.from(document.querySelectorAll('.ag-cs-context-ring, .ag-cs-inline-stats'));
-      const a =
-        anchorEl ||
-        cands.find((el) => {
-          const r = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null;
-          return r && r.width > 0 && r.height > 0;
-        }) ||
-        cands[0];
-      const card = a?.closest?.('.surface-composer-card');
-      const ib = a?.closest?.('[data-testid="agent-input-box"]') || document.querySelector('[data-testid="agent-input-box"]');
-      const cid = resolveCascadeId(ib);
-      const data = (cid && activeTrajCache.get(cid)?.data) || card?._agCsLastData || null;
-      if (a) openContextPopover(a, data, tab || 'breakdown');
-    },
     getState() {
       return {
         cfg: { ...cfg },
@@ -4600,16 +3340,13 @@
         hasCrab: Boolean(crabState.root && crabState.root.isConnected),
         hasSmoothCaret: Boolean(document.querySelector('.ag-cs-smooth-caret')),
         hasEffortPopover: Boolean(openEffortPop && openEffortPop.isConnected),
-        hasContextPopover: Boolean(openPopover && openPopover.isConnected),
       };
     },
     destroy() {
       teardownCore();
       for (const fn of [
-        closeContextPopover,
         closeEffortPopover,
         teardownSmoothCarets,
-        clearTurnBadges,
         unmountRipple,
         unmountPanelSeat,
         unmountCrab,
@@ -4635,9 +3372,12 @@
         el.style.removeProperty('--ag-cs-rim-pct');
         el.style.removeProperty('--ag-cs-rim-color');
       });
+      document.querySelectorAll('[data-ag-cs-crab-anchor]').forEach((el) => {
+        el.removeAttribute('data-ag-cs-crab-anchor');
+      });
       document
         .querySelectorAll(
-          '.ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, .ag-cs-perf-backdrop, #' + SETTINGS_SEC_ID
+          '.ag-cs-crab, .ag-cs-smooth-caret, .ag-cs-home-panel-seat, .ag-cs-ripple-canvas, .ag-cs-effort-popover, .ag-cs-inline-stats, .ag-cs-context-ring, .ag-cs-ctx-popover, .ag-cs-turn-bar, .ag-cs-hud-top-bar, .ag-cs-hud-bottom-bar, .ag-cs-hud-rim-progress, .ag-cs-hud-footer-chip, .ag-cs-perf-backdrop, #' + SETTINGS_SEC_ID
         )
         .forEach((el) => el.remove());
       const html = document.documentElement;

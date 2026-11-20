@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const i18nCore = require('../i18n-core.js');
 const i18nLocales = require('../i18n-locales.js');
 
@@ -258,7 +262,8 @@ test('normalizeLanguage, LANG_OPTIONS, and UI_TABLE support all 5 required langu
     assert.ok(ui.setLanguageTitle);
     assert.ok(ui.setLanguageDesc);
     assert.ok(ui.tabOverview);
-    assert.ok(ui.tabQuotas);
+    assert.ok(ui.setSidebarCompactTitle);
+    assert.ok(ui.setPlaceholderStyleTitle);
     assert.ok(ui.studioPlaceholder);
     assert.ok(ui.perfKicker);
   }
@@ -308,7 +313,44 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     const optOutTime = makeEl('span', { text: 'now' });
     optOut.append(optOutTime);
 
-    body.append(dialog, sidebarRow, modelBtn, workedBtn, homeGreeting, sentenceP, prose, optOut);
+    const umCapsule = makeEl('div', { id: 'ag-usage-monitor-capsule' });
+    const umCapText = makeEl('span', { text: 'Settings' });
+    const umCapTime = makeEl('span', { text: '5m' });
+    umCapsule.append(umCapText, umCapTime);
+
+    const umPortal = makeEl('div', { id: 'ag-usage-monitor-portal' });
+    const umPortText = makeEl('span', { text: 'Now' });
+    umPortal.append(umPortText);
+
+    const sshLabel = makeEl('span', { text: 'SSH Remote' });
+    const swarmLabel = makeEl('span', { text: 'Swarm Board' });
+    const checksLabel = makeEl('span', { text: 'Checks passing' });
+    const workedUpdateBtn = makeEl('button', { text: 'Worked for 13m · 1 update' });
+    const swarmUiBtn = makeEl('button', { text: 'Open the Swarm UI' });
+    const turboSpan = makeEl('span', { text: 'Turbo' });
+    const respBtn = makeEl('button', { attrs: { 'aria-label': 'Response actions' } });
+    const sidecarBtn = makeEl('button', { attrs: { 'aria-label': 'Sidecar View' } });
+
+    body.append(
+      dialog,
+      sidebarRow,
+      modelBtn,
+      workedBtn,
+      homeGreeting,
+      sentenceP,
+      prose,
+      optOut,
+      umCapsule,
+      umPortal,
+      sshLabel,
+      swarmLabel,
+      checksLabel,
+      workedUpdateBtn,
+      swarmUiBtn,
+      turboSpan,
+      respBtn,
+      sidecarBtn
+    );
 
     const translator = i18nCore.createDomTranslator(i18nLocales.resolveLocaleBundle);
 
@@ -330,6 +372,17 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     assert.equal(codeEl.textContent, 'now'); // code untouched
     assert.equal(copyCodeBtn.textContent, '复制代码'); // control inside prose translated
     assert.equal(optOutTime.textContent, 'now'); // opt-out untouched
+    assert.equal(umCapText.textContent, 'Settings'); // usage-monitor capsule untouched
+    assert.equal(umCapTime.textContent, '5m');
+    assert.equal(umPortText.textContent, 'Now'); // usage-monitor portal untouched
+    assert.equal(sshLabel.textContent, 'SSH 远程');
+    assert.equal(swarmLabel.textContent, '蜂群看板');
+    assert.equal(checksLabel.textContent, '检查通过');
+    assert.equal(workedUpdateBtn.textContent, '已运行 13分钟 · 1 条更新');
+    assert.equal(swarmUiBtn.textContent, '打开蜂群界面');
+    assert.equal(turboSpan.textContent, '极速');
+    assert.equal(respBtn.getAttribute('aria-label'), '回复操作');
+    assert.equal(sidecarBtn.getAttribute('aria-label'), '侧边面板视图');
 
     // Verify characterData mutation inside protected code/opt-out (zone === 0) does NOT trigger timeRules!
     codeEl.childNodes[0].nodeValue = '5m';
@@ -351,6 +404,9 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     assert.equal(workedBtn.textContent, '已執行 4分鐘12秒');
     assert.equal(modelBtn.getAttribute('aria-label'), '選取模型，目前：Gemini 4 Hydrogen (High)');
     assert.equal(copyCodeBtn.textContent, '複製程式碼');
+    assert.equal(sshLabel.textContent, 'SSH 遠端');
+    assert.equal(umCapText.textContent, 'Settings');
+    assert.equal(umPortText.textContent, 'Now');
 
     // 3. Cantonese
     translator.setLanguage('yue', doc);
@@ -359,6 +415,8 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     assert.equal(workedBtn.textContent, '做咗 4分鐘12秒');
     assert.equal(modelBtn.getAttribute('aria-label'), '揀模型，而家：Gemini 4 Hydrogen (High)');
     assert.equal(homeGreeting.textContent, '歡迎返嚟，girl。由邊度繼續好？');
+    assert.equal(sshLabel.textContent, 'SSH 遙距');
+    assert.equal(umCapText.textContent, 'Settings');
 
     // 4. Japanese
     translator.setLanguage('ja', doc);
@@ -370,6 +428,8 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     assert.equal(workedBtn.textContent, '4分12秒 作業');
     assert.equal(modelBtn.getAttribute('aria-label'), 'モデルを選択（現在: Gemini 4 Hydrogen (High)）');
     assert.equal(copyCodeBtn.textContent, 'コードをコピー');
+    assert.equal(sshLabel.textContent, 'SSH リモート');
+    assert.equal(umCapText.textContent, 'Settings');
 
     // Test revertNode / translateNode on a single subtree
     translator.revertNode(homeGreeting);
@@ -390,10 +450,35 @@ test('createDomTranslator translates full Antigravity UI across all 5 locales, g
     assert.equal(modelBtn.getAttribute('aria-label'), 'Select model, current: Gemini 4 Hydrogen (High)');
     assert.equal(homeGreeting.textContent, 'Welcome back, girl. Where should we pick up?');
     assert.equal(copyCodeBtn.textContent, 'Copy code');
+    assert.equal(sshLabel.textContent, 'SSH Remote');
+    assert.equal(swarmLabel.textContent, 'Swarm Board');
+    assert.equal(checksLabel.textContent, 'Checks passing');
+    assert.equal(workedUpdateBtn.textContent, 'Worked for 13m · 1 update');
+    assert.equal(swarmUiBtn.textContent, 'Open the Swarm UI');
+    assert.equal(turboSpan.textContent, 'Turbo');
+    assert.equal(respBtn.getAttribute('aria-label'), 'Response actions');
+    assert.equal(sidecarBtn.getAttribute('aria-label'), 'Sidecar View');
+    assert.equal(umCapText.textContent, 'Settings');
+    assert.equal(umPortText.textContent, 'Now');
 
     translator.destroy();
   } finally {
     globalThis.NodeFilter = prevNF;
     globalThis.MutationObserver = prevMO;
   }
+});
+
+test('i18n-locales DICT_ROWS has zero duplicate English keys', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'i18n-locales.js'), 'utf8');
+  const slice = src.slice(src.indexOf('const DICT_ROWS = ['), src.indexOf('const SENTENCE_ROWS = ['));
+  const seen = new Set();
+  const duplicates = [];
+  for (const line of slice.split(/\r?\n/)) {
+    const m = line.match(/^\s*\[\s*(['"])((?:\\.|(?!\1).)+)\1\s*,/);
+    if (!m) continue;
+    const key = m[2].replace(/\\'/g, "'").replace(/\\"/g, '"');
+    if (seen.has(key)) duplicates.push(key);
+    seen.add(key);
+  }
+  assert.deepEqual(duplicates, []);
 });

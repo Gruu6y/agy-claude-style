@@ -36,67 +36,7 @@
     noModelUsage: ['暂无模型用量记录', '尚無模型用量紀錄', '暫時冇模型用量紀錄', 'No model usage data yet', 'モデル使用データは未記録です'],
     sessionsUnit: ['个会话', '個工作階段', '個對話', 'sessions', 'セッション'],
     tokenUnit: ['Token', 'Token', 'Token', 'tokens', 'トークン'],
-    toolsShort: ['工具', '工具', '工具', 'Tools', 'ツール'],
     showLess: ['收起', '收合', '收埋', 'Show less', '折りたたむ'],
-
-    // ── Context Popover & Telemetry ──────────────────────────────────────────
-    activeModelFallback: ['当前模型', '目前模型', '而家個模型', 'Active Model', '使用中モデル'],
-    quotaRemShort: ['配额剩余', '配額剩餘', '剩餘配額', 'Quota Rem', '残クォータ'],
-    thinkingEllipsis: ['思考中…', '思考中…', '諗緊…', 'Thinking…', '思考中…'],
-    streamingEllipsis: ['输出中…', '輸出中…', '出緊字…', 'Streaming…', '生成中…'],
-    segSystemRules: ['系统提示与规则', '系統提示與規則', '系統提示同規則', 'System & Rules', 'システムとルール'],
-    segChatMessages: ['对话历史消息', '對話歷史訊息', '對話歷史訊息', 'Chat Messages', 'チャット履歴'],
-    segToolResults: ['工具执行结果', '工具執行結果', '工具執行結果', 'Tool Results', 'ツール実行結果'],
-    segOverhead: ['其他上下文开销', '其他上下文開銷', '其他上下文開銷', 'Context Overhead', 'その他オーバーヘッド'],
-    segRemaining: ['剩余可用容量', '剩餘可用容量', '剩低可用容量', 'Remaining Free Capacity', '残り利用可能容量'],
-    kpiRemaining: ['剩余可用容量', '剩餘可用容量', '剩低可用容量', 'Remaining Free', '残り容量'],
-    usedWord: ['已用', '已用', '用咗', 'Used', '使用済み'],
-    kpiCacheHit: ['缓存命中率', '快取命中率', '快取命中率', 'Cache Hit Rate', 'キャッシュ率'],
-    cacheReadShort: ['读', '讀', '讀', 'Read', '読込'],
-    cacheFreshShort: ['新', '新', '新', 'Fresh', '新規'],
-    kpiSpeed: ['生成吞吐速度', '生成吞吐速度', '生成速度', 'Output Speed', '生成速度'],
-    speedAvgShort: ['均值', '平均', '平均', 'Avg', '平均'],
-    kpiSessionTotal: ['会话累计消耗', '工作階段累計消耗', '對話累計用量', 'Session Total', 'セッション合計'],
-    turnsUnit: ['轮', '輪', '輪', 'turns', 'ターン'],
-    callsUnit: ['次调用', '次呼叫', '次呼叫', 'calls', '回呼出'],
-    callsShortUnit: ['轮', '輪', '輪', 'calls', '回'],
-    stepsUnit: ['步', '步', '步', 'steps', 'ステップ'],
-    outShort: ['输出', '輸出', '輸出', 'Out', '出力'],
-    ctxBreakdownTitle: ['上下文窗口构成明细', '上下文視窗構成明細', '上下文視窗明細', 'Context Window Breakdown', 'コンテキスト内訳'],
-    rulesBudget: ['规则预算', '規則預算', '規則預算', 'Rules Budget', 'ルール上限'],
-    customBudget: ['自定义预算', '自訂預算', '自訂預算', 'Custom Budget', 'カスタム上限'],
-    maxWindow: ['窗口上限', '視窗上限', '視窗上限', 'Max Window', '最大ウィンドウ'],
-    latestCallTitle: ['最近一次调用指标', '最近一次呼叫指標', '最近一次呼叫數據', 'Latest Model Call', '最新モデル呼び出し'],
-    freshIn: ['新输入', '新輸入', '新輸入', 'Fresh In', '新規入力'],
-    cacheRead: ['缓存读取', '快取讀取', '快取讀取', 'Cache Read', 'キャッシュ読込'],
-    replyOutput: ['回复输出', '回覆輸出', '回覆輸出', 'Output', '応答出力'],
-    thinkingTokens: ['思考 Token', '思考 Token', '思考 Token', 'Thinking', '思考トークン'],
-    turnsEmpty: ['当前会话暂无轮次记录', '目前對話尚無輪次紀錄', '呢段對話暫時未有輪次紀錄', 'No turn records in active conversation yet.', 'この会話のターン記録はまだありません。'],
-    ctxShort: ['上下文', '上下文', '上下文', 'Ctx', 'Ctx'],
-    thinkShort: ['思考', '思考', '思考', 'Think', '思考'],
-    cacheShort: ['缓存', '快取', '快取', 'Cache', 'キャッシュ'],
-    noSubagents: ['本轮对话暂未调用子代理', '本對話尚未呼叫子代理', '呢段對話暫時未用子代理', 'No subagents invoked in this session.', 'このセッションではサブエージェント未使用です。'],
-    runningTag: ['运行中', '執行中', '行緊', 'Running', '実行中'],
-    noToolOutputs: ['暂无工具执行输出数据', '尚無工具執行輸出資料', '暫時冇工具輸出資料', 'No tool output data yet.', 'ツール出力データはまだありません。'],
-    quotaPoolsTitle: ['模型配额池剩余 (Model Quotas)', '模型配額池剩餘 (Model Quotas)', '模型配額剩餘 (Model Quotas)', 'Model Quota Pools Remaining', 'モデルクォータ残量'],
-    quotaLoading: ['正在读取模型配额状态…', '正在讀取模型配額狀態…', '讀取緊模型配額狀態…', 'Loading model quota status…', 'モデルクォータを読み込み中…'],
-    activeTag: ['当前', '目前', '而家', 'Active', '使用中'],
-    remShort: ['剩余', '剩餘', '剩餘', 'Rem', '残り'],
-    weeklyLabel: ['周配额', '週配額', '週配額', 'Weekly', '週間'],
-    popoverTitle: ['上下文窗口与 Token 监控', '上下文視窗與 Token 監控', '上下文視窗同 Token 監控', 'Context & Token HUD', 'コンテキスト＆Token HUD'],
-    compactBtnTitle: ['向输入框填入 /compact 压缩上下文', '向輸入框填入 /compact 壓縮上下文', '填入 /compact 到輸入框壓縮上下文', 'Fill /compact into composer', '入力欄に /compact を入力して圧縮'],
-    copyBtnTitle: ['复制完整遥测报告', '複製完整遙測報告', '複製完整遙測報告', 'Copy telemetry report', 'テレメトリレポートをコピー'],
-    copyBtnLabel: ['复制报告', '複製報告', '複製報告', 'Copy', 'コピー'],
-    copiedBtnLabel: ['✓ 已复制', '✓ 已複製', '✓ 複製咗', '✓ Copied', '✓ コピー済み'],
-    refreshBtnTitle: ['立即刷新遥测与配额', '立即重新整理遙測與配額', '即刻重新整理數據同配額', 'Refresh telemetry', 'データを更新'],
-    closeBtnTitle: ['关闭', '關閉', '關閉', 'Close', '閉じる'],
-    remAvailLabel: ['剩余可用', '剩餘可用', '剩低可用', 'Remaining', '残り利用可能'],
-    draftWord: ['草稿', '草稿', '草稿', 'Draft', '下書き'],
-    tabBreakdown: ['上下文拆分', '上下文拆分', '上下文明細', 'Breakdown', '内訳'],
-    tabQuotas: ['模型配额', '模型配額', '模型配額', 'Quotas', 'クォータ'],
-    sessionThroughput: ['累计吞吐', '累計吞吐', '累計用量', 'Session', 'セッション合計'],
-    modelQuotaRem: ['模型配额剩余', '模型配額剩餘', '模型剩餘配額', 'Quota Rem', 'モデル残クォータ'],
-    quotaRemWord: ['配额剩余', '配額剩餘', '剩餘配額', 'Quota Rem', 'クォータ残量'],
 
     // ── Effort Slider Popovers ───────────────────────────────────────────────
     effortTitle: ['推理等级', '推理等級', '推理等級', 'Reasoning effort', '推論レベル'],
@@ -108,8 +48,6 @@
     // ── Settings Panel ───────────────────────────────────────────────────────
     grpAppearance: ['外观与版面', '外觀與版面', '外觀同版面', 'Appearance & Layout', '外観とレイアウト'],
     grpInteraction: ['交互与思考滑块', '互動與思考滑桿', '互動同思考滑桿', 'Slider, Caret & Mascot', 'スライダー・カーソル・マスコット'],
-    grpTelemetry: ['Token 用量与环绕 HUD', 'Token 用量與環繞 HUD', 'Token 用量同環繞 HUD', 'Usage Ring & HUD', '使用量リングと HUD'],
-    hudSummaryLabel: ['输入框环绕 HUD（可选增强）', '輸入框環繞 HUD（可選增強）', '輸入框環繞 HUD（可選增強）', 'Composer Surround HUD (Optional)', '入力欄サラウンド HUD（オプション）'],
     badgeClaude: ['仅 Claude Code', '僅 Claude Code', '只限 Claude Code', 'Claude Code', 'Claude Code のみ'],
     badgeLwf: ['仅 梁武峰', '僅 梁武峰', '只限 梁武峰', 'Liang Wufeng', '梁武峰 のみ'],
     onLabel: ['开启', '開啟', '開啟', 'On', 'オン'],
@@ -162,6 +100,14 @@
       'Apply Claude-style row height and hover plates to sidebar.',
       '左サイドバーの行間とホバー表示を Claude スタイルに調整します。',
     ],
+    setSidebarCompactTitle: ['侧栏紧凑密度', '側邊欄緊湊密度', '側欄緊湊密度', 'Compact Sidebar', 'コンパクトサイドバー'],
+    setSidebarCompactDesc: [
+      '进一步压缩侧栏行高与组间距，适合项目或对话较多时一屏浏览更多条目。',
+      '進一步壓縮側邊欄行高與群組間距，適合專案或對話較多時一次瀏覽更多項目。',
+      '再收窄側欄行距同分組間隔，多對話時可以一屏睇多幾行。',
+      'Tighten sidebar row height and spacing to fit more items.',
+      'サイドバーの行高と余白をさらに詰め、より多くの項目を表示します。',
+    ],
     setComposerTitle: ['极简输入框重排', '極簡輸入框重排', '極簡輸入框重排', 'Composer Restyle', '入力欄リスタイル'],
     setComposerDesc: [
       '将输入框重排为纯圆角输入区 + 底部无边框控制栏。',
@@ -170,6 +116,16 @@
       'Minimalist rounded input box + canvas footer.',
       '丸みを帯びたシンプルな入力欄とフッターに再構成します。',
     ],
+    setPlaceholderStyleTitle: ['输入框占位提示', '輸入框佔位提示', '輸入框佔位提示', 'Composer Placeholder', '入力欄プレースホルダー'],
+    setPlaceholderStyleDesc: [
+      '选择空输入框显示 Claude Studio 引导语或保留宿主原生提示文案。',
+      '選擇空白輸入框顯示 Claude Studio 引導語或保留宿主原生提示文字。',
+      '揀空輸入框顯示 Claude Studio 提示語定保留原本提示文字。',
+      'Show Studio placeholder prompt or keep native host copy.',
+      '空の入力欄に Studio 風の案内文を表示するか標準に戻すか選びます。',
+    ],
+    optPlaceholderStudio: ['Claude 风格', 'Claude 風格', 'Claude 風格', 'Studio', 'スタジオ'],
+    optPlaceholderHost: ['原生文案', '原生文案', '原版文案', 'Host', '標準'],
     setEffortStyleTitle: ['思考强度滑块风格', '思考強度滑桿風格', '思考強度滑桿風格', 'Thinking Effort Slider Style', '推論レベルスライダースタイル'],
     setEffortStyleDesc: [
       '点击模型名右侧思考等级徽章弹出调节器：支持 Claude Code 像素矩阵、ChatGPT Codex 星空能量条与 梁武峰 性能人像风格。',
@@ -221,42 +177,6 @@
       'Interactive character matrix ripple field on home view.',
       'ホーム背景クリックで文字グリッドの波紋アニメーションを再生します。',
     ],
-    setInlineStatsTitle: ['对话内嵌统计与剩余用量环', '對話內嵌統計與剩餘用量環', '對話內嵌統計同剩餘用量環', 'Inline Stats & Remaining Ring', 'インライン統計＆残量リング'],
-    setInlineStatsDesc: [
-      '在对话底栏显示用量速率、缓存命中率与环形剩余容量占比。',
-      '在對話底列顯示用量速率、快取命中率與環形剩餘容量佔比。',
-      '喺對話底欄顯示用量速率、快取命中率同圓環剩餘容量百分比。',
-      'Show inline session stats & remaining capacity ring.',
-      '入力フッターに生成速度・キャッシュ率・残量リングを表示します。',
-    ],
-    setRingModeTitle: ['右下角圆环显示模式', '右下角圓環顯示模式', '右下角圓環顯示模式', 'Bottom-Right Ring Mode', '右下リング表示モード'],
-    setRingModeDesc: [
-      '右下角圆环默认显示上下文窗口剩余百分比或当前模型配额剩余百分比。',
-      '右下角圓環預設顯示上下文視窗剩餘百分比或目前模型配額剩餘百分比。',
-      '右下角圓環預設顯示上下文視窗剩餘百分比定係而家個模型剩餘配額。',
-      'Display Context Remaining % or Model Quota Remaining %.',
-      '右下リングにコンテキスト残量またはモデルクォータ残量のどちらを表示するか選びます。',
-    ],
-    optRingContext: ['上下文剩余 %', '上下文剩餘 %', '上下文剩餘 %', 'Context Rem %', 'コンテキスト残量 %'],
-    optRingQuota: ['配额剩余 %', '配額剩餘 %', '配額剩餘 %', 'Quota Rem %', 'クォータ残量 %'],
-    setTurnBadgesTitle: ['对话轮次 Token 徽章', '對話輪次 Token 徽章', '對話輪次 Token 徽章', 'Per-Turn Token Badges', 'ターン毎 Token バッジ'],
-    setTurnBadgesDesc: [
-      '在每轮 AI 回复底部渲染上下文增量、输出与速率徽章。',
-      '在每輪 AI 回覆底部渲染上下文增量、輸出與速率徽章。',
-      '喺每輪 AI 回覆底顯示上下文增量、輸出同速率徽章。',
-      'Render per-turn token telemetry badges in conversation.',
-      '各 AI 応答の下部にコンテキスト増分・出力・速度バッジを表示します。',
-    ],
-    setHudTopBarTitle: ['输入框顶部 HUD 进度条', '輸入框頂部 HUD 進度條', '輸入框頂部 HUD 進度條', 'Composer Top HUD Bar', '入力欄上部 HUD バー'],
-    setHudTopBarDesc: ['在输入框顶部显示轻量上下文占用分段条。', '在輸入框頂部顯示輕量上下文佔用分段條。', '喺輸入框頂部顯示輕量上下文用量分段條。', 'Show context progress bar above composer.', '入力欄の上部にコンテキスト進捗バーを表示します。'],
-    setHudBottomBarTitle: ['输入框底部 HUD 统计栏', '輸入框底部 HUD 統計列', '輸入框底部 HUD 統計欄', 'Composer Bottom HUD Bar', '入力欄下部 HUD バー'],
-    setHudBottomBarDesc: ['在输入框外下方显示详细上下文与配额统计条。', '在輸入框外下方顯示詳細上下文與配額統計列。', '喺輸入框下面顯示詳細上下文同配額統計欄。', 'Show detailed HUD telemetry bar below composer.', '入力欄の下部に詳細な統計バーを表示します。'],
-    setHudRimTitle: ['输入框流光边框进度', '輸入框流光邊框進度', '輸入框流光邊框進度', 'Composer Rim Progress', '入力欄リム進捗ライン'],
-    setHudRimDesc: ['沿输入框底边/四周渲染实时上下文占比进度边线。', '沿輸入框底邊/四周渲染即時上下文佔比進度邊線。', '沿輸入框邊線顯示即時上下文用量進度。', 'Render context usage rim progress around composer.', '入力欄の枠線に沿ってリアルタイム使用率を表示します。'],
-    setHudChipTitle: ['底栏剩余容量胶囊', '底列剩餘容量膠囊', '底欄剩餘容量膠囊', 'Footer Remaining Chip', 'フッター残量チップ'],
-    setHudChipDesc: ['在输入框工具栏显示剩余可用容量与配额胶囊按钮。', '在輸入框工具列顯示剩餘可用容量與配額膠囊按鈕。', '喺輸入框工具列顯示剩低容量同配額膠囊掣。', 'Show remaining context/quota chip in composer footer.', 'フッターツールバーに残り容量・クォータのチップを表示します。'],
-    setHudCompactTitle: ['HUD 紧凑显示模式', 'HUD 緊湊顯示模式', 'HUD 緊湊顯示模式', 'Compact HUD Mode', 'コンパクト HUD モード'],
-    setHudCompactDesc: ['缩小环绕 HUD 与底栏胶囊字体边距，节省垂直空间。', '縮小環繞 HUD 與底列膠囊字體邊距，節省垂直空間。', '縮細環繞 HUD 同底欄膠囊字體邊距，慳返垂直位。', 'Use compact padding and condensed typography for Token HUD.', 'Token HUD の余白とフォントを詰めて省スペース化します。'],
   };
 
   function getUiStrings(lang) {
@@ -274,95 +194,6 @@
         : lang === 'ja'
         ? `さらに ${n} 件表示`
         : `Show ${n} more`;
-    out.hudSummaryMeta = (n) =>
-      lang === 'zh-CN'
-        ? `${n} 项`
-        : lang === 'zh-TW'
-        ? `${n} 項`
-        : lang === 'yue'
-        ? `${n} 項`
-        : lang === 'ja'
-        ? `${n} 項目`
-        : `${n} options`;
-    out.tabTurnsN = (n) =>
-      lang === 'zh-CN'
-        ? `对话轮次 (${n})`
-        : lang === 'zh-TW'
-        ? `對話輪次 (${n})`
-        : lang === 'yue'
-        ? `對話輪次 (${n})`
-        : lang === 'ja'
-        ? `ターン (${n})`
-        : `Turns (${n})`;
-    out.tabToolsN = (n) =>
-      lang === 'zh-CN'
-        ? `工具/代理 (${n})`
-        : lang === 'zh-TW'
-        ? `工具/代理 (${n})`
-        : lang === 'yue'
-        ? `工具/代理 (${n})`
-        : lang === 'ja'
-        ? `ツール (${n})`
-        : `Tools (${n})`;
-    out.toolDeclarationsN = (n) =>
-      lang === 'zh-CN'
-        ? `工具定义声明 (${n})`
-        : lang === 'zh-TW'
-        ? `工具定義宣告 (${n})`
-        : lang === 'yue'
-        ? `工具定義聲明 (${n})`
-        : lang === 'ja'
-        ? `ツール定義 (${n})`
-        : `Tool Declarations (${n})`;
-    out.liveDraftN = (n) =>
-      lang === 'zh-CN'
-        ? `当前输入草稿 (${n} 字)`
-        : lang === 'zh-TW'
-        ? `目前輸入草稿 (${n} 字)`
-        : lang === 'yue'
-        ? `而家草稿 (${n} 字)`
-        : lang === 'ja'
-        ? `入力中の下書き (${n} 文字)`
-        : `Live Draft (${n} chars)`;
-    out.subagentsHeading = (cnt, calls, tokFmt) =>
-      lang === 'zh-CN'
-        ? `子代理消耗 (${cnt} 个 · ${calls} 次调用 · 累计 ${tokFmt})`
-        : lang === 'zh-TW'
-        ? `子代理消耗 (${cnt} 個 · ${calls} 次呼叫 · 累計 ${tokFmt})`
-        : lang === 'yue'
-        ? `子代理用量 (${cnt} 個 · ${calls} 次呼叫 · 累計 ${tokFmt})`
-        : lang === 'ja'
-        ? `サブエージェント (${cnt} 体 · ${calls} 回呼出 · 合計 ${tokFmt})`
-        : `Subagents (${cnt} · ${calls} calls · Total ${tokFmt})`;
-    out.toolResultsHeading = (tokFmt) =>
-      lang === 'zh-CN'
-        ? `工具输出体积排行 (共 ${tokFmt} tok)`
-        : lang === 'zh-TW'
-        ? `工具輸出大小排行 (共 ${tokFmt} tok)`
-        : lang === 'yue'
-        ? `工具輸出大細排行 (共 ${tokFmt} tok)`
-        : lang === 'ja'
-        ? `ツール結果サイズ順 (${tokFmt} tok)`
-        : `Tool Results Leaderboard (${tokFmt} tok)`;
-    out.ringTooltip = (remStr, maxStr, remPctStr, usedStr, usedPctStr, quotaPct) => {
-      const qTip =
-        quotaPct != null
-          ? lang === 'zh-CN'
-            ? ` · 配额剩余 ${quotaPct.toFixed(1)}%`
-            : lang === 'zh-TW'
-            ? ` · 配額剩餘 ${quotaPct.toFixed(1)}%`
-            : lang === 'yue'
-            ? ` · 剩餘配額 ${quotaPct.toFixed(1)}%`
-            : lang === 'ja'
-            ? ` · クォータ残 ${quotaPct.toFixed(1)}%`
-            : ` · Quota Rem ${quotaPct.toFixed(1)}%`
-          : '';
-      if (lang === 'zh-CN') return `剩余可用 ${remStr} / ${maxStr} (${remPctStr}%) · 已用 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'zh-TW') return `剩餘可用 ${remStr} / ${maxStr} (${remPctStr}%) · 已用 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'yue') return `剩低可用 ${remStr} / ${maxStr} (${remPctStr}%) · 用咗 ${usedStr} (${usedPctStr}%)${qTip}`;
-      if (lang === 'ja') return `残り ${remStr} / ${maxStr} (${remPctStr}%) · 使用済 ${usedStr} (${usedPctStr}%)${qTip}`;
-      return `Remaining ${remStr} / ${maxStr} (${remPctStr}%) · Used ${usedStr} (${usedPctStr}%)${qTip}`;
-    };
     out.perfPreviewStatus = (frameStr, modelShort, subTitle, fullLabel) => {
       if (lang === 'zh-CN') return `预览帧 ${frameStr} · 松手吸附到 ${modelShort} ${subTitle}`;
       if (lang === 'zh-TW') return `預覽影格 ${frameStr} · 放開吸附至 ${modelShort} ${subTitle}`;
@@ -2092,6 +1923,57 @@
     ['Workflows', '工作流', '工作流程', '工作流程', 'ワークフロー'],
     ['Plugins Manager', '插件管理器', '外掛管理員', '插件管理器', 'プラグインマネージャー'],
     ['History', '历史记录', '歷史紀錄', '歷史紀錄', '履歴'],
+    // ── AGY 2.33.0 / 1.5.x Additions (SSH, PRs, Swarm, Browser & Execution Modes) ──
+    ['Connect via SSH', '通过 SSH 连接', '透過 SSH 連線', '經 SSH 連線', 'SSH で接続'],
+    ['SSH Remote', 'SSH 远程', 'SSH 遠端', 'SSH 遙距', 'SSH リモート'],
+    ['Remote SSH', '远程 SSH', '遠端 SSH', '遙距 SSH', 'リモート SSH'],
+    ['Remote Workspace', '远程工作区', '遠端工作區', '遙距工作區', 'リモートワークスペース'],
+    ['Disconnect SSH', '断开 SSH 连接', '中斷 SSH 連線', '斷開 SSH 連線', 'SSH を切断'],
+    ['Reconnecting...', '正在重连…', '正在重新連線…', '重新連線緊…', '再接続中…'],
+    ['Pull Requests', '拉取请求', '提取要求 (PR)', 'Pull Requests', 'プルリクエスト'],
+    ['Checks passing', '检查通过', '檢查通過', '檢查通過', 'チェック合格'],
+    ['Checks failing', '检查失败', '檢查失敗', '檢查失敗', 'チェック失敗'],
+    ['Checks pending', '检查等待中', '檢查等待中', '檢查等緊', 'チェック待機中'],
+    ['Changes requested', '需要修改', '要求變更', '要求修改', '変更リクエスト済み'],
+    ['Ready for review', '可审阅', '可供檢閱', '可以審批', 'レビュー準備完了'],
+    ['Draft PR', '草稿 PR', '草稿 PR', '草稿 PR', 'ドラフト PR'],
+    ['Merge pull request', '合并拉取请求', '合併提取要求', '合併 Pull Request', 'プルリクエストをマージ'],
+    ['Swarm Board', '蜂群看板', '蜂群看板', '蜂群看板', 'スウォームボード'],
+    ['Swarm Monitor', '蜂群监控', '蜂群監控', '蜂群監控', 'スウォームモニター'],
+    ['Message Board', '消息看板', '訊息看板', '訊息看板', 'メッセージボード'],
+    ['Find in page', '在页面中查找', '在頁面中尋找', '喺頁面搵嘢', 'ページ内検索'],
+    ['Live Preview', '实时预览', '即時預覽', '即時預覽', 'ライブプレビュー'],
+    ['Execution mode', '执行模式', '執行模式', '執行模式', '実行モード'],
+    ['Plan mode', '规划模式', '規劃模式', '規劃模式', 'プランモード'],
+    ['Fast mode', '快速模式', '快速模式', '快速模式', '高速モード'],
+    ['Agentic mode', '智能体模式', '代理模式', '代理模式', 'エージェントモード'],
+    ['Open in Browser', '在浏览器中打开', '在瀏覽器中開啟', '喺瀏覽器打開', 'ブラウザで開く'],
+    ['Open in IDE', '在 IDE 中打开', '在 IDE 中開啟', '喺 IDE 打開', 'IDE で開く'],
+    ['Copy link', '复制链接', '複製連結', '複製連結', 'リンクをコピー'],
+    ['Aux Pane', '辅助面板', '輔助窗格', '輔助面板', '補助ペイン'],
+    ['Sidecar', '侧边辅助面板', '側邊輔助面板', '側邊輔助面板', 'サイドカー'],
+    // ── AGY 2.33.0 Live-Audited Controls & SSH / PR / Swarm / Find Terms ──
+    ['Open the Swarm UI', '打开蜂群界面', '開啟蜂群介面', '打開蜂群介面', 'Swarm UI を開く'],
+    ['Response actions', '回复操作', '回覆動作', '回覆動作', '応答アクション'],
+    ['Sidecar View', '侧边面板视图', '側邊面板檢視', '側邊面板檢視', 'サイドカービュー'],
+    ['Turbo', '极速', '極速', '極速', 'Turbo'],
+    ['Add SSH Host', '添加 SSH 主机', '新增 SSH 主機', '加 SSH 主機', 'SSH ホストを追加'],
+    ['SSH Hosts', 'SSH 主机', 'SSH 主機', 'SSH 主機', 'SSH ホスト'],
+    ['Connect to Host', '连接到主机', '連線至主機', '連去主機', 'ホストに接続'],
+    ['Connecting to SSH host...', '正在连接 SSH 主机…', '正在連線至 SSH 主機…', '連緊去 SSH 主機…', 'SSH ホストに接続中…'],
+    ['SSH connection failed', 'SSH 连接失败', 'SSH 連線失敗', 'SSH 連線失敗', 'SSH 接続に失敗しました'],
+    ['Roster', '成员名单', '成員名單', '成員名單', 'ロスター'],
+    ['Coordinator', '协调者', '協調者', '協調者', 'コーディネーター'],
+    ['Worker', '工作节点', '工作節點', '工作節點', 'ワーカー'],
+    ['Workers', '工作节点', '工作節點', '工作節點', 'ワーカー'],
+    ['Stalled', '已停滞', '已停滯', '停滯咗', '停止中'],
+    ['Quota Heavy', '高配额消耗', '高配額消耗', '高配額消耗', '高クォータ消費'],
+    ['Open Pull Request', '打开拉取请求', '開啟提取要求', '開 Pull Request', 'プルリクエストを開く'],
+    ['View Pull Request', '查看拉取请求', '檢視提取要求', '睇 Pull Request', 'プルリクエストを表示'],
+    ['Open on GitHub', '在 GitHub 上打开', '在 GitHub 開啟', '喺 GitHub 開', 'GitHub で開く'],
+    ['Merged', '已合并', '已合併', '已合併', 'マージ済み'],
+    ['No matches', '无匹配结果', '無相符結果', '冇相符結果', '一致なし'],
+    ['Close find bar', '关闭查找栏', '關閉尋找列', '閂搵嘢欄', '検索バーを閉じる'],
   );
 
   // ── Part 4: Sentences, Duration Units, Dynamic Rules & Bundle Resolver ─
@@ -2174,6 +2056,8 @@
     ['^Show more \\((\\d+)\\)$', '', '显示更多 ($1)', '顯示更多 ($1)', '顯示多啲 ($1)', 'さらに表示 ($1)'],
     ['^See all \\((\\d+)\\)$', '', '查看全部 ($1)', '檢視全部 ($1)', '睇晒全部 ($1)', 'すべて表示 ($1)'],
     ['^Show (\\d+) breakdowns?$', '', '显示 $1 项明细', '顯示 $1 項明細', '顯示 $1 項明細', '$1 件の内訳を表示'],
+    ['^Worked for (.+?)\\s*[·•]\\s*(\\d+)\\s+updates?$', '', '已运行 $D1 · $2 条更新', '已執行 $D1 · $2 則更新', '做咗 $D1 · $2 個更新', '$D1 作業 · $2 件の更新'],
+    ['^Thought for (.+?)\\s*[·•]\\s*(\\d+)\\s+updates?$', '', '思考了 $D1 · $2 条更新', '思考了 $D1 · $2 則更新', '諗咗 $D1 · $2 個更新', '$D1 思考 · $2 件の更新'],
     ['^Worked for (.+)$', '', '已运行 $D1', '已執行 $D1', '做咗 $D1', '$D1 作業'],
     ['^Thought for (.+)$', '', '思考了 $D1', '思考了 $D1', '諗咗 $D1', '$D1 思考'],
     ['^Thinking for (.+)$', '', '已思考 $D1', '已思考 $D1', '諗咗 $D1', '$D1 思考中'],
@@ -2226,6 +2110,7 @@
     ['^Executions \\((\\d+)\\)$', '', '执行次数 ($1)', '執行次數 ($1)', '執行次數 ($1)', '実行回数 ($1)'],
     ['^Switch environment \\((.+)\\)$', '', '切换环境 ($1)', '切換環境 ($1)', '轉環境 ($1)', '環境を切り替え ($1)'],
     ['^Error: (.+)$', '', '错误：$1', '錯誤：$1', '出錯：$1', 'エラー：$1'],
+    ['^(\\d+) / (\\d+) matches?$', '', '第 $1 / $2 处匹配', '第 $1 / $2 處相符', '第 $1 / $2 個結果', '$1 / $2 件一致'],
     ['^Cost summary: (.+)$', '', '费用摘要：$1', '費用摘要：$1', '用量摘要：$1', 'コスト概要：$1'],
     ['^Permission: (.+)$', '', '权限：$1', '權限：$1', '權限：$1', '権限：$1'],
     ['^Move to Group: (.+)$', '', '移到分组：$1', '移至群組：$1', '搬去群組：$1', 'グループへ移動：$1'],

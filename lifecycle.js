@@ -3,7 +3,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 const BROKEN_PIPE_CODES = new Set([
   'EPIPE',
@@ -942,6 +942,19 @@ async function ensureDesktopRemoteDebuggingLaunchers({
     }
   }
 
+  if (platform === 'darwin') {
+    // macOS .app bundles carry Apple code signatures; relaunching via `open -a ... --args` handles CDP flags.
+    return {
+      checked: true,
+      updated: false,
+      alreadyConfigured: false,
+      configured: false,
+      updatedPaths: [],
+      configuredPaths: [],
+      reason: 'macos_app_bundle_signed',
+    };
+  }
+
   return {
     checked: true,
     updated: false,
@@ -950,6 +963,434 @@ async function ensureDesktopRemoteDebuggingLaunchers({
     updatedPaths: [],
     configuredPaths: [],
     reason: 'unsupported_platform',
+  };
+}
+
+function buildSanitizedDesktopRelaunchEnv(baseEnv = process.env) {
+  const clean = {};
+  for (const [key, val] of Object.entries(baseEnv || {})) {
+    if (val === undefined || val === null) continue;
+    if (/^(?:ANTIGRAVITY_|CHROME_DEVTOOLS_MCP_|AGY_CLAUDE_STYLE_|ELECTRON_RUN_AS_NODE$|NODE_OPTIONS$)/i.test(key)) {
+      continue;
+    }
+    clean[key] = String(val);
+  }
+  return clean;
+}
+
+function resolveDesktopHostExecutable({
+  env = process.env,
+  platform = process.platform,
+  homeDir = os.homedir(),
+  existsFn = fs.existsSync,
+} = {}) {
+  const safeExists = (p) => {
+    try {
+      return Boolean(p && existsFn(p));
+    } catch {
+      return false;
+    }
+  };
+
+  const hintPaths = [
+    String(env?.AGY_CLAUDE_STYLE_HOST_EXE || '').trim(),
+    String(env?.ANTIGRAVITY_AGENTAPI_EXE || '').trim(),
+    String(env?.CHROME_DEVTOOLS_MCP_JS || '').trim(),
+  ].filter(Boolean);
+
+  for (const rawHint of hintPaths) {
+    if (platform === 'darwin') {
+      const appIdx = rawHint.toLowerCase().indexOf('.app/');
+      const bundleCand =
+        appIdx >= 0
+          ? rawHint.slice(0, appIdx + 4)
+          : rawHint.toLowerCase().endsWith('.app')
+            ? rawHint
+            : '';
+      if (bundleCand && safeExists(bundleCand)) {
+        const isIde = /antigravity\s*ide\.app$/i.test(bundleCand);
+        const macBin = path.join(bundleCand, 'Contents', 'MacOS', isIde ? 'Antigravity IDE' : 'Antigravity');
+        return {
+          found: true,
+          kind: isIde ? 'ide' : 'desktop',
+          executablePath: safeExists(macBin) ? macBin : bundleCand,
+          appBundlePath: bundleCand,
+        };
+      }
+    }
+
+    if (platform === 'win32' && /\.exe$/i.test(rawHint) && !/language_server/i.test(rawHint)) {
+      if (safeExists(rawHint)) {
+        const isIde = /antigravity\s*ide\.exe$/i.test(rawHint);
+        return {
+          found: true,
+          kind: isIde ? 'ide' : 'desktop',
+          executablePath: rawHint,
+          appBundlePath: '',
+        };
+      }
+    }
+
+    let cur = rawHint;
+    for (let depth = 0; depth < 8 && cur && path.dirname(cur) !== cur; depth += 1) {
+      const base = path.basename(cur).toLowerCase();
+      if (base === 'resources') {
+        const installRoot = path.dirname(cur);
+        if (platform === 'win32') {
+          const desktopExe = path.join(installRoot, 'Antigravity.exe');
+          if (safeExists(desktopExe)) {
+            return { found: true, kind: 'desktop', executablePath: desktopExe, appBundlePath: '' };
+          }
+          const ideExe = path.join(installRoot, 'Antigravity IDE.exe');
+          if (safeExists(ideExe)) {
+            return { found: true, kind: 'ide', executablePath: ideExe, appBundlePath: '' };
+          }
+        } else if (platform === 'linux') {
+          for (const binName of ['antigravity', 'Antigravity']) {
+            const linuxExe = path.join(installRoot, binName);
+            if (safeExists(linuxExe)) {
+              return { found: true, kind: 'desktop', executablePath: linuxExe, appBundlePath: '' };
+            }
+          }
+        }
+      }
+      cur = path.dirname(cur);
+    }
+  }
+
+  if (platform === 'win32') {
+    const localAppData = env?.LOCALAPPDATA || path.join(homeDir, 'AppData', 'Local');
+    const programFiles = env?.ProgramFiles || 'C:\\Program Files';
+    const winCandidates = [
+      path.join(localAppData, 'Programs', 'antigravity', 'Antigravity.exe'),
+      path.join(localAppData, 'Programs', 'Antigravity', 'Antigravity.exe'),
+      path.join(programFiles, 'Antigravity', 'Antigravity.exe'),
+      path.join(localAppData, 'Antigravity', 'Antigravity.exe'),
+    ];
+    for (const cand of winCandidates) {
+      if (safeExists(cand)) {
+        return { found: true, kind: 'desktop', executablePath: cand, appBundlePath: '' };
+      }
+    }
+  } else if (platform === 'darwin') {
+    const macBundles = [
+      path.join(homeDir, 'Applications', 'Antigravity.app'),
+      '/Applications/Antigravity.app',
+    ];
+    for (const bundlePath of macBundles) {
+      if (safeExists(bundlePath)) {
+        const macBin = path.join(bundlePath, 'Contents', 'MacOS', 'Antigravity');
+        return {
+          found: true,
+          kind: 'desktop',
+          executablePath: safeExists(macBin) ? macBin : bundlePath,
+          appBundlePath: bundlePath,
+        };
+      }
+    }
+  } else {
+    const linuxCandidates = [
+      '/opt/Antigravity/antigravity',
+      '/opt/antigravity/antigravity',
+      '/usr/share/antigravity/antigravity',
+      '/usr/bin/antigravity',
+      path.join(homeDir, '.local', 'bin', 'antigravity'),
+    ];
+    for (const cand of linuxCandidates) {
+      if (safeExists(cand)) {
+        return { found: true, kind: 'desktop', executablePath: cand, appBundlePath: '' };
+      }
+    }
+  }
+
+  return { found: false, kind: '', executablePath: '', appBundlePath: '' };
+}
+
+function runLauncherExecFile(file, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      file,
+      args,
+      {
+        windowsHide: true,
+        timeout: options.timeoutMs || 8000,
+        maxBuffer: 1024 * 1024,
+        env: options.env || process.env,
+      },
+      (err, stdout) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(String(stdout || ''));
+      }
+    );
+  });
+}
+
+function spawnDetachedRelaunch(file, args, options = {}) {
+  const child = spawn(file, args, {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    cwd: options.cwd || undefined,
+    env: options.env || process.env,
+  });
+  if (typeof child.unref === 'function') child.unref();
+  return Promise.resolve({ pid: Number(child?.pid || 0) });
+}
+
+async function discoverRunningHostExecutable({ platform = process.platform, execFileFn = null } = {}) {
+  const runner = execFileFn || runLauncherExecFile;
+  if (platform === 'win32') {
+    try {
+      const ps =
+        "@(Get-Process -Name 'Antigravity','Antigravity IDE' -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1) | ForEach-Object { [pscustomobject]@{ path = [string]$_.Path; name = [string]$_.ProcessName } } | ConvertTo-Json -Compress";
+      const out = await runner(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+        { timeoutMs: 4000 }
+      );
+      const trimmed = String(out || '').trim();
+      if (trimmed && trimmed.startsWith('{')) {
+        const parsed = JSON.parse(trimmed);
+        const exePath = String(parsed?.path || '').trim();
+        if (exePath) {
+          const isIde = /ide/i.test(String(parsed?.name || '')) || /antigravity\s*ide\.exe$/i.test(exePath);
+          return {
+            found: true,
+            kind: isIde ? 'ide' : 'desktop',
+            executablePath: exePath,
+            appBundlePath: '',
+          };
+        }
+      }
+    } catch {}
+  } else if (platform === 'darwin') {
+    try {
+      const out = await runner('osascript', ['-e', 'POSIX path of (path to application "Antigravity")'], {
+        timeoutMs: 3000,
+      });
+      const bundlePath = String(out || '').trim().replace(/\/+$/, '');
+      if (bundlePath && /\.app$/i.test(bundlePath)) {
+        return {
+          found: true,
+          kind: 'desktop',
+          executablePath: bundlePath,
+          appBundlePath: bundlePath,
+        };
+      }
+    } catch {}
+  }
+  return { found: false, kind: '', executablePath: '', appBundlePath: '' };
+}
+
+function psSingleQuote(val) {
+  return `'${String(val ?? '').replace(/'/g, "''")}'`;
+}
+
+function buildWindowsRelaunchInnerScript(executablePath, stalePortFiles = [], kind = 'desktop') {
+  const procName = kind === 'ide' ? 'Antigravity IDE' : 'Antigravity';
+  const portLiterals = (Array.isArray(stalePortFiles) ? stalePortFiles : [])
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .map(psSingleQuote)
+    .join(', ');
+
+  return `
+Start-Sleep -Milliseconds 480
+$exe = ${psSingleQuote(executablePath)}
+$procName = ${psSingleQuote(procName)}
+$staleList = @(${portLiterals})
+$mySid = (Get-Process -Id $PID).SessionId
+
+if (-not $exe -or -not (Test-Path -LiteralPath $exe)) {
+  $livePath = Get-Process -Name $procName -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $mySid -and $_.Path } | Select-Object -First 1 -ExpandProperty Path
+  if ($livePath) { $exe = [string]$livePath }
+}
+
+$findTargets = {
+  @(Get-Process -Name $procName -ErrorAction SilentlyContinue | Where-Object {
+    $_.SessionId -eq $mySid -and (-not $_.Path -or -not $exe -or [string]::Equals($_.Path, $exe, [System.StringComparison]::OrdinalIgnoreCase))
+  })
+}
+
+$initial = & $findTargets
+foreach ($p in $initial) {
+  try {
+    if ($p.MainWindowHandle -ne 0) { [void]$p.CloseMainWindow() }
+  } catch {}
+}
+Start-Sleep -Milliseconds 850
+
+$remaining = & $findTargets
+foreach ($p in $remaining) {
+  try { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } catch {}
+}
+
+for ($i = 0; $i -lt 30; $i++) {
+  if ((& $findTargets).Count -eq 0) { break }
+  Start-Sleep -Milliseconds 200
+}
+
+foreach ($fp in $staleList) {
+  if ($fp -and (Test-Path -LiteralPath $fp)) {
+    try { Remove-Item -LiteralPath $fp -Force -ErrorAction SilentlyContinue } catch {}
+  }
+}
+
+if ($exe -and (Test-Path -LiteralPath $exe)) {
+  $workDir = Split-Path -Parent $exe
+  Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=0' -WorkingDirectory $workDir
+}
+
+if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
+`.trim();
+}
+
+const WIN_OUT_OF_JOB_DISPATCH_PS = `
+$ErrorActionPreference = 'Stop'
+$innerArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $env:AGY_RELAUNCH_PS1 + '"'
+try {
+  $shellApp = New-Object -ComObject Shell.Application
+  $shellApp.ShellExecute('powershell.exe', $innerArgs, '', 'open', 0)
+  Write-Output '{"ok":true,"method":"shell_application"}'
+} catch {
+  Start-Process -FilePath 'powershell.exe' -ArgumentList $innerArgs -WindowStyle Hidden
+  Write-Output '{"ok":true,"method":"start_process"}'
+}
+`.trim();
+
+async function triggerDesktopHostRelaunch({
+  env = process.env,
+  platform = process.platform,
+  homeDir = os.homedir(),
+  stalePortFiles = [],
+  tempDir = '',
+  execFileFn = null,
+  spawnFn = null,
+  existsFn = fs.existsSync,
+  writeFileFn = fs.writeFileSync,
+  mkdirFn = fs.mkdirSync,
+  allowInTest = false,
+} = {}) {
+  if (
+    !allowInTest &&
+    (String(env?.AGY_CLAUDE_STYLE_SKIP_LAUNCHER_PROVISION || '') === '1' ||
+      String(env?.ANTIGRAVITY_LS_ADDRESS || '').trim() === 'test.invalid')
+  ) {
+    return { ok: false, status: 403, error: 'Disabled in test sandbox' };
+  }
+
+  let hostInfo = resolveDesktopHostExecutable({ env, platform, homeDir, existsFn });
+  if (!hostInfo.found) {
+    hostInfo = await discoverRunningHostExecutable({ platform, execFileFn });
+  }
+  if (!hostInfo.found) {
+    return {
+      ok: false,
+      status: 404,
+      error: 'Unable to locate Antigravity executable on this machine',
+    };
+  }
+
+  const cleanEnv = buildSanitizedDesktopRelaunchEnv(env);
+  const cleanStaleFiles = (Array.isArray(stalePortFiles) ? stalePortFiles : [])
+    .map((p) => String(p || '').trim())
+    .filter(Boolean);
+
+  if (platform === 'win32') {
+    const innerScript = buildWindowsRelaunchInnerScript(
+      hostInfo.executablePath,
+      cleanStaleFiles,
+      hostInfo.kind
+    );
+    const resolvedTempDir = String(tempDir || env?.TEMP || env?.TMP || os.tmpdir()).trim();
+    mkdirFn(resolvedTempDir, { recursive: true });
+    const relaunchPs1Path = path.join(resolvedTempDir, `agy-cs-relaunch-${process.pid}.ps1`);
+    // UTF-8 BOM lets Windows PowerShell 5.1 handle non-ASCII install paths reliably.
+    writeFileFn(relaunchPs1Path, `\uFEFF${innerScript}\r\n`, 'utf8');
+
+    const runner = execFileFn || runLauncherExecFile;
+    await runner(
+      'powershell.exe',
+      [
+        '-Sta',
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        WIN_OUT_OF_JOB_DISPATCH_PS,
+      ],
+      {
+        timeoutMs: 6000,
+        env: {
+          ...cleanEnv,
+          AGY_RELAUNCH_PS1: relaunchPs1Path,
+        },
+      }
+    );
+    return {
+      ok: true,
+      relaunching: true,
+      platform,
+      executablePath: hostInfo.executablePath,
+    };
+  }
+
+  const spawner = spawnFn || spawnDetachedRelaunch;
+
+  if (platform === 'darwin') {
+    const appTarget = hostInfo.appBundlePath || hostInfo.executablePath;
+    const appName = hostInfo.kind === 'ide' ? 'Antigravity IDE' : 'Antigravity';
+    const shScript = [
+      'sleep 0.45',
+      `osascript -e 'tell application "${appName}" to quit' >/dev/null 2>&1 || true`,
+      `i=0; while [ $i -lt 25 ] && pgrep -x "${appName}" >/dev/null 2>&1; do sleep 0.2; i=$((i+1)); done`,
+      `if pgrep -x "${appName}" >/dev/null 2>&1; then killall "${appName}" >/dev/null 2>&1 || true; sleep 0.4; fi`,
+      'IFS=":"; for f in $AGY_STALE_PORT_FILES; do [ -n "$f" ] && rm -f "$f"; done',
+      'open -a "$AGY_RELAUNCH_APP" --args --remote-debugging-port=0 >/dev/null 2>&1',
+    ].join('; ');
+    await spawner('/bin/sh', ['-c', shScript], {
+      env: {
+        ...cleanEnv,
+        AGY_RELAUNCH_APP: appTarget,
+        AGY_STALE_PORT_FILES: cleanStaleFiles.join(':'),
+      },
+    });
+    return {
+      ok: true,
+      relaunching: true,
+      platform,
+      executablePath: appTarget,
+    };
+  }
+
+  const procLeaf = path.basename(hostInfo.executablePath) || 'antigravity';
+  const linuxScript = [
+    'sleep 0.45',
+    'uid="$(id -u)"',
+    'pkill -u "$uid" -x "$AGY_PROC_NAME" >/dev/null 2>&1 || true',
+    'i=0; while [ $i -lt 25 ] && pgrep -u "$uid" -x "$AGY_PROC_NAME" >/dev/null 2>&1; do sleep 0.2; i=$((i+1)); done',
+    'IFS=":"; for f in $AGY_STALE_PORT_FILES; do [ -n "$f" ] && rm -f "$f"; done',
+    'nohup "$AGY_RELAUNCH_EXE" --remote-debugging-port=0 >/dev/null 2>&1 &',
+  ].join('; ');
+  await spawner('/bin/sh', ['-c', linuxScript], {
+    env: {
+      ...cleanEnv,
+      AGY_RELAUNCH_EXE: hostInfo.executablePath,
+      AGY_PROC_NAME: procLeaf,
+      AGY_STALE_PORT_FILES: cleanStaleFiles.join(':'),
+    },
+  });
+  return {
+    ok: true,
+    relaunching: true,
+    platform,
+    executablePath: hostInfo.executablePath,
   };
 }
 
@@ -985,5 +1426,9 @@ module.exports = {
   patchWindowsRunRegistryCommand,
   patchLinuxDesktopEntryText,
   ensureDesktopRemoteDebuggingLaunchers,
+  buildSanitizedDesktopRelaunchEnv,
+  resolveDesktopHostExecutable,
+  buildWindowsRelaunchInnerScript,
+  triggerDesktopHostRelaunch,
   exitProcessCleanly,
 };

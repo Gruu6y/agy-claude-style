@@ -1,6 +1,6 @@
 // Aux Pane Sidecar UI server for AGY Claude Style.
 // Uses sidecar_sdk and cleans up cleanly via host /healthz watchdog when Antigravity exits.
-import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,64 @@ const { removeFromAllWindows } = require('../../remove.js');
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const HTML_PATH = join(__dirname, 'index.html');
 const NO_STORE_HEADERS = { 'Cache-Control': 'no-store, no-cache, must-revalidate' };
+
+function isLocalHostRequest(req) {
+  if (!req?.headers) return true;
+  const host = String(req.headers.host || '').trim().toLowerCase();
+  const hostMatch = host.match(/^(127\.0\.0\.1|localhost|\[::1\])(?::(\d+))?$/);
+  if (host && !hostMatch) {
+    return false;
+  }
+  const origin = String(req.headers.origin || '').trim().toLowerCase();
+  if (origin && /^vscode-webview:\/\/[a-z0-9._-]+$/.test(origin)) {
+    return true;
+  }
+  const secFetchSite = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+  if (secFetchSite === 'cross-site') {
+    return false;
+  }
+  if (origin) {
+    const originMatch = origin.match(/^(https?):\/\/(127\.0\.0\.1|localhost|\[::1\])(?::(\d+))?$/);
+    if (!originMatch) {
+      return false;
+    }
+    if (hostMatch) {
+      const defaultPort = originMatch[1] === 'https' ? '443' : '80';
+      const originPort = originMatch[3] || defaultPort;
+      const hostPort = hostMatch[2] || defaultPort;
+      if (originPort !== hostPort) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+const LAUNCHER_CACHE_TTL_MS = 30000;
+let launcherDiagCache = { at: 0, value: null };
+
+async function getLauncherDiagnosticsCached() {
+  const now = Date.now();
+  if (launcherDiagCache.value && now - launcherDiagCache.at < LAUNCHER_CACHE_TTL_MS) {
+    return launcherDiagCache.value;
+  }
+  let res = null;
+  try {
+    res = await lifecycle.ensureDesktopRemoteDebuggingLaunchers({ enabled: true });
+  } catch (err) {
+    res = { checked: true, configured: false, updated: false, reason: err?.message || 'error' };
+  }
+  const normalized = {
+    checked: Boolean(res?.checked),
+    configured: Boolean(res?.configured),
+    updated: Boolean(res?.updated),
+    updatedCount: Array.isArray(res?.updatedPaths) ? res.updatedPaths.length : 0,
+    configuredCount: Array.isArray(res?.configuredPaths) ? res.configuredPaths.length : 0,
+    reason: String(res?.reason || ''),
+  };
+  launcherDiagCache = { at: now, value: normalized };
+  return normalized;
+}
 
 async function getStudioStatus() {
   const config = cdp.readConfig();
@@ -35,6 +93,12 @@ async function getStudioStatus() {
     } catch {}
   }
 
+  const launcher = !activePort
+    ? await getLauncherDiagnosticsCached()
+    : { checked: false, configured: true, updated: false, updatedCount: 0, configuredCount: 0, reason: '' };
+  const hostInfo = !activePort ? lifecycle.resolveDesktopHostExecutable() : { found: false };
+  const canRelaunch = Boolean(hostInfo.found || process.platform === 'win32' || process.platform === 'darwin');
+
   return {
     ok: true,
     version: cdp.PLUGIN_VERSION,
@@ -44,13 +108,25 @@ async function getStudioStatus() {
       alive: watcherAlive,
       pid: watcherAlive ? watcherPid : null,
     },
+    launcher,
     cdp: {
       port: activePort,
       candidatePorts: ports,
       pageCount: pages.length,
+      needsCdpRestart: !activePort,
+      canRelaunch,
       pages,
     },
   };
+}
+
+async function relaunchDesktopHost() {
+  await lifecycle.ensureDesktopRemoteDebuggingLaunchers({ enabled: true }).catch(() => null);
+  launcherDiagCache = { at: 0, value: null };
+  return lifecycle.triggerDesktopHostRelaunch({
+    stalePortFiles: cdp.resolvePortCandidates(),
+    tempDir: cdp.STATE_DIR,
+  });
 }
 
 async function applyConfigUpdate(data) {
@@ -87,7 +163,8 @@ async function applyConfigUpdate(data) {
 }
 
 async function resetStudioConfig() {
-  writeFileSync(cdp.CONFIG_FILE, JSON.stringify(cdp.DEFAULT_CONFIG, null, 2) + '\n', 'utf8');
+  cdp.ensureMigratedPluginConfig();
+  cdp.atomicWriteFileSync(cdp.CONFIG_FILE, JSON.stringify(cdp.DEFAULT_CONFIG, null, 2) + '\n');
   const watcherPid = lifecycle.readWatcherPid(cdp.PID_FILE, cdp.LOCK_FILE);
   if (!watcherPid || !lifecycle.isPidAlive(watcherPid)) {
     try {
@@ -110,17 +187,37 @@ async function startStudioSidecar() {
     });
   });
 
-  app.api('/api/status', async () => getStudioStatus(), 'GET');
-  app.api('/api/config', async (data) => applyConfigUpdate(data), 'POST');
-  app.api('/api/reset', async () => resetStudioConfig(), 'POST');
-  app.api('/api/reinject', async () => {
+  const guardApi = (fn) => async (data, req) => {
+    if (!isLocalHostRequest(req)) {
+      return new Response(JSON.stringify({ ok: false, error: 'Forbidden host or origin' }), {
+        status: 403,
+        contentType: 'application/json',
+      });
+    }
+    return fn(data, req);
+  };
+
+  app.api('/api/status', guardApi(async () => getStudioStatus()), 'GET');
+  app.api('/api/config', guardApi(async (data) => applyConfigUpdate(data)), 'POST');
+  app.api('/api/reset', guardApi(async () => resetStudioConfig()), 'POST');
+  app.api('/api/reinject', guardApi(async () => {
     const res = await injectOnce({ log: () => {} });
     return { ok: true, ...res };
-  }, 'POST');
-  app.api('/api/remove', async () => {
+  }), 'POST');
+  app.api('/api/remove', guardApi(async () => {
     const removed = await removeFromAllWindows({ log: () => {}, warn: () => {} });
     return { ok: true, removed };
-  }, 'POST');
+  }), 'POST');
+  app.api('/api/relaunch', guardApi(async () => {
+    const res = await relaunchDesktopHost();
+    if (!res?.ok) {
+      return new Response(JSON.stringify(res), {
+        status: res?.status || 500,
+        contentType: 'application/json',
+      });
+    }
+    return res;
+  }), 'POST');
 
   let shuttingDown = false;
   let watchdog = null;
@@ -198,8 +295,10 @@ if (isSameEntryPath(invokedPath, currentPath)) {
 }
 
 export {
+  isLocalHostRequest,
   getStudioStatus,
   applyConfigUpdate,
   resetStudioConfig,
+  relaunchDesktopHost,
   startStudioSidecar,
 };

@@ -1,7 +1,7 @@
 // Stop the background watcher (if running) and remove AGY Claude Style (agy-claude-style) from all Antigravity windows.
 const fs = require('fs');
 const { PID_FILE, LOCK_FILE, readActivePorts, listPages, CdpSession, REMOVE_EXPRESSION } = require('./cdp');
-const { readWatcherPid, isPidAlive, waitForPidExit } = require('./lifecycle');
+const { readWatcherPid, isPidAlive, waitForPidExit, ensureDesktopRemoteDebuggingLaunchers } = require('./lifecycle');
 
 async function stopWatcher() {
   const pid = readWatcherPid(PID_FILE, LOCK_FILE);
@@ -54,13 +54,18 @@ async function removeFromAllWindows({ log = console.log, warn = console.warn } =
 
 if (require.main === module) {
   (async () => {
+    const cleanLaunchers = process.argv.includes('--clean-launchers');
     const stopped = await stopWatcher();
     const ports = readActivePorts();
     if (!ports.length) {
       if (!stopped) console.log('[*] 未发现运行中的 agy-claude-style 守护进程或 Antigravity 调试端口');
-      return;
+    } else {
+      await removeFromAllWindows();
     }
-    await removeFromAllWindows();
+    if (cleanLaunchers) {
+      const cleaned = await ensureDesktopRemoteDebuggingLaunchers({ enabled: false });
+      console.log('[✓] 已清理启动器调试端口参数:', JSON.stringify({ updated: cleaned.updated, configured: cleaned.configured }));
+    }
   })();
 }
 

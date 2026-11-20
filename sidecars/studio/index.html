@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AGY Claude Style</title>
+  <title>AGY Claude Style Studio</title>
   <script src="/preload.js"></script>
   <style>
     :root {
@@ -13,11 +13,55 @@
       --muted-fg: var(--muted-foreground, #9a9aa6);
       --card-bg: var(--card, rgba(255, 255, 255, 0.04));
       --border-col: var(--border, rgba(255, 255, 255, 0.12));
+      --control-bg: rgba(255, 255, 255, 0.05);
+      --badge-bg: #1b1918;
       --accent: #d97757;
       --accent-soft: rgba(217, 119, 87, 0.16);
       --ok: #3fb950;
       --warn: #d29922;
+      --warn-bg: rgba(210, 153, 34, 0.14);
+      --warn-border: rgba(210, 153, 34, 0.45);
+      --toast-bg: rgba(27, 25, 24, 0.94);
+      --toast-fg: #f4f4f6;
       --radius: 10px;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        --bg: var(--background, #f6f6f7);
+        --fg: var(--foreground, #1a1b1e);
+        --muted-fg: var(--muted-foreground, #61646b);
+        --card-bg: var(--card, #ffffff);
+        --border-col: var(--border, rgba(0, 0, 0, 0.11));
+        --control-bg: #ffffff;
+        --badge-bg: rgba(217, 119, 87, 0.14);
+        --warn-bg: rgba(210, 153, 34, 0.12);
+        --toast-bg: rgba(26, 27, 30, 0.94);
+        --toast-fg: #ffffff;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg: var(--background, #f6f6f7);
+      --fg: var(--foreground, #1a1b1e);
+      --muted-fg: var(--muted-foreground, #61646b);
+      --card-bg: var(--card, #ffffff);
+      --border-col: var(--border, rgba(0, 0, 0, 0.11));
+      --control-bg: #ffffff;
+      --badge-bg: rgba(217, 119, 87, 0.14);
+      --warn-bg: rgba(210, 153, 34, 0.12);
+      --toast-bg: rgba(26, 27, 30, 0.94);
+      --toast-fg: #ffffff;
+    }
+    :root[data-theme="dark"] {
+      --bg: var(--background, #161618);
+      --fg: var(--foreground, #ececef);
+      --muted-fg: var(--muted-foreground, #9a9aa6);
+      --card-bg: var(--card, rgba(255, 255, 255, 0.04));
+      --border-col: var(--border, rgba(255, 255, 255, 0.12));
+      --control-bg: #1e1f23;
+      --badge-bg: #1b1918;
+      --warn-bg: rgba(210, 153, 34, 0.14);
+      --toast-bg: rgba(27, 25, 24, 0.94);
+      --toast-fg: #f4f4f6;
     }
     * { box-sizing: border-box; }
     body {
@@ -47,7 +91,7 @@
       width: 30px;
       height: 30px;
       border-radius: 8px;
-      background: #1b1918;
+      background: var(--badge-bg, #1b1918);
       border: 1.5px solid var(--accent);
       display: grid;
       place-items: center;
@@ -80,6 +124,18 @@
       background: var(--warn);
     }
     .dot.ok { background: var(--ok); }
+    .banner {
+      display: none;
+      padding: 9px 11px;
+      border-radius: 9px;
+      background: var(--warn-bg);
+      border: 1px solid var(--warn-border);
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .banner.show { display: block; }
+    .banner-title { font-weight: 600; margin-bottom: 2px; }
+    .banner-desc { font-size: 11.5px; color: var(--muted-fg); }
     .actions {
       display: flex;
       flex-wrap: wrap;
@@ -125,8 +181,7 @@
       font-size: 12px;
       font-weight: 600;
       color: var(--muted-fg);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.02em;
       margin: 0 0 8px 0;
     }
     .row {
@@ -134,31 +189,39 @@
       align-items: center;
       justify-content: space-between;
       gap: 10px;
-      padding: 6px 0;
-      border-top: 1px solid rgba(128, 128, 128, 0.1);
+      padding: 7px 0;
+      border-top: 1px solid rgba(128, 128, 128, 0.12);
     }
     .row:first-of-type { border-top: none; }
+    .row.is-dimmed {
+      opacity: 0.52;
+      transition: opacity 120ms ease;
+    }
     .row-label {
       display: flex;
       flex-direction: column;
       gap: 1px;
+      min-width: 0;
+      flex: 1;
     }
     .row-name { font-weight: 500; }
     .row-desc { font-size: 11px; color: var(--muted-fg); }
     select {
-      background: var(--bg);
+      background: var(--control-bg);
       color: var(--fg);
       border: 1px solid var(--border-col);
       border-radius: 7px;
       padding: 4px 8px;
       font-size: 12px;
-      min-width: 118px;
+      min-width: 122px;
+      flex-shrink: 0;
     }
     input[type="checkbox"] {
       width: 16px;
       height: 16px;
       accent-color: var(--accent);
       cursor: pointer;
+      flex-shrink: 0;
     }
     .toast {
       position: sticky;
@@ -166,8 +229,8 @@
       margin-top: 8px;
       padding: 7px 10px;
       border-radius: 8px;
-      background: rgba(27, 25, 24, 0.94);
-      color: #f4f4f6;
+      background: var(--toast-bg);
+      color: var(--toast-fg);
       border: 1px solid var(--accent);
       font-size: 12px;
       display: none;
@@ -181,82 +244,266 @@
       <div class="brand-badge" aria-hidden="true">🦀</div>
       <div>
         <div class="brand-title">AGY Claude Style</div>
-        <div class="brand-sub" id="meta-line">加载中...</div>
+        <div class="brand-sub" id="meta-line">...</div>
       </div>
     </div>
     <div class="status-pill" id="status-pill">
       <span class="dot" id="status-dot"></span>
-      <span id="status-text">检测中</span>
+      <span id="status-text">...</span>
+    </div>
+  </div>
+
+  <div class="banner" id="cdp-banner">
+    <div class="banner-title" id="cdp-banner-title"></div>
+    <div class="banner-desc" id="cdp-banner-desc"></div>
+    <div class="banner-desc" id="cdp-banner-meta" style="margin-top:4px"></div>
+    <div class="actions" style="margin:8px 0 0">
+      <button class="primary" id="btn-relaunch"></button>
     </div>
   </div>
 
   <div class="actions">
-    <button class="primary" id="btn-reinject">立即注入 / 刷新</button>
-    <button id="btn-remove">无痕恢复原版</button>
-    <button id="btn-reset">恢复默认配置</button>
-    <button id="btn-refresh">刷新状态</button>
+    <button class="primary" id="btn-reinject"></button>
+    <button id="btn-remove"></button>
+    <button id="btn-reset"></button>
+    <button id="btn-refresh"></button>
   </div>
 
   <div id="sections"></div>
   <div class="toast" id="toast"></div>
 
   <script>
-    const GROUPS = [
-      {
-        title: '外观与首页 Studio',
-        items: [
-          { key: 'language', label: '界面语言', desc: '5 语言全局本地化（保留代码与正文）', type: 'select', options: [
-            ['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']
-          ]},
-          { key: 'palette', label: '配色方案', desc: '黑曜石蓝 / Claude 暖色 / 跟随宿主', type: 'select', options: [
-            ['obsidian', 'Obsidian'], ['claude', 'Claude'], ['host', '跟随宿主']
-          ]},
-          { key: 'homeLayout', label: '首页布局', desc: 'Studio 用量仪表盘 / 经典 / 关闭', type: 'select', options: [
-            ['studio', 'Studio'], ['classic', '经典'], ['off', '关闭']
-          ]},
-          { key: 'homeRipple', label: '字符波纹海', desc: '首页交互式二维字符水波背景', type: 'boolean' },
-          { key: 'logoInk', label: 'Logo 色调', desc: '首页顶部拱形 Logo 线条颜色', type: 'select', options: [
-            ['accent', '主题强调色'], ['foreground', '前景色']
-          ]},
-          { key: 'composerRestyle', label: '极简输入框', desc: '重排工作区胶囊与输入栏样式', type: 'boolean' },
-          { key: 'placeholderStyle', label: '占位提示风格', desc: 'Studio 提示或宿主原生提示', type: 'select', options: [
-            ['studio', 'Studio'], ['host', '宿主原生']
-          ]},
-          { key: 'smoothCaret', label: '丝滑打字光标', desc: '平滑插值光标动画（兼容 IME）', type: 'boolean' },
-          { key: 'sidebarRestyle', label: '侧栏美化', desc: '统一侧边栏行高与悬停高亮板', type: 'boolean' },
-          { key: 'sidebarCompact', label: '侧栏紧凑间距', desc: '收紧侧栏会话列表条目间距', type: 'boolean' }
-        ]
+    const TEXTS = {
+      'zh-CN': {
+        loading: '加载中…',
+        checking: '检测中',
+        connected: (port, n) => `CDP :${port} · ${n} 窗口`,
+        waitingPort: '等待调试端口',
+        disconnected: '未连接 CDP',
+        watcherOn: (pid) => `守护中 (PID ${pid})`,
+        watcherOff: '守护未运行',
+        readFailed: '读取失败',
+        cdpTitle: '需要重启一次 Antigravity 以激活本地调试端口',
+        cdpDesc: 'Antigravity 2.33.0+ 默认关闭调试端口。插件已为启动器补齐 --remote-debugging-port=0，可点击下方按钮直接重拉或手动退出重开。',
+        cdpDescMac: 'macOS .app 携带签名不自动改写包内参数。点击下方按钮一键重启 Antigravity 并追加 --remote-debugging-port=0，样式即可自动生效。',
+        launcherReady: (n) => `启动器诊断：已自动为 ${n} 个启动入口写入调试参数`,
+        launcherPending: '启动器诊断：未检测到标准快捷方式，建议直接点击下方按钮带参重启',
+        btnRelaunch: '一键重启并启用调试端口',
+        relaunching: '正在重启 Antigravity 并开启调试端口…',
+        relaunchFail: (e) => `重启失败: ${e}`,
+        btnReinject: '立即注入 / 刷新',
+        btnRemove: '无痕恢复原版',
+        btnReset: '恢复默认配置',
+        btnRefresh: '刷新状态',
+        actionOk: (l) => `${l}完成`,
+        actionFail: (l, e) => `${l}失败: ${e}`,
+        savedToast: (k) => `已更新 ${k}（热更新生效）`,
+        invalidToast: (k) => `设置 ${k} 校验失败`,
+        saveErrToast: (e) => `保存失败: ${e}`,
+        grpAppearance: '外观与版面（共 8 项）',
+        grpInteraction: '交互与思考滑块（共 6 项）',
+        items: {
+          language: ['界面语言', '5 语言全局界面本地化（自动跳过代码与对话正文）', [['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']]],
+          homeLayout: ['首页版面', '切换新对话首页布局：Studio 看板 / 居中经典 / 原生', [['studio', '仪表盘 Studio'], ['classic', '居中经典'], ['off', '恢复原生']]],
+          palette: ['配色方案', 'Obsidian 深邃蓝黑 / Claude 暖炭灰 / 跟随宿主主题', [['obsidian', '深邃蓝黑'], ['claude', 'Claude 暖灰'], ['host', '跟随宿主']]],
+          logoInk: ['Antigravity Logo 着色', '首页顶部拱形 Logo 线条颜色风格', [['accent', '主题强调色'], ['foreground', '前景色']]],
+          sidebarRestyle: ['侧栏 Claude 风格', '统一侧边栏行高与悬停高亮底板'],
+          sidebarCompact: ['侧栏紧凑密度', '收紧侧栏对话与项目列表行高，一屏显示更多条目'],
+          composerRestyle: ['极简输入框重排', '重排圆角输入卡片与底部无边框控制栏'],
+          placeholderStyle: ['输入框占位提示', '显示 Claude Studio 引导语或保留宿主原生提示文案', [['studio', 'Claude 风格'], ['host', '原生文案']]],
+          effortSliderStyle: ['思考强度滑块风格', '点击思考等级徽章时弹出的交互滑块样式', [['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']]],
+          effortAccent: ['Claude 推理色阶强调', '在 Claude Code 模式下使用蓝紫渐层（关闭后为黑白灰）'],
+          performanceBackdrop: ['梁武峰性能人像背景', '31 帧抠像人像背景展示位置', [['card', '仅滑块卡片'], ['page', '全窗口背景'], ['off', '关闭']]],
+          smoothCaret: ['打字光标流畅滑动', '平滑插值光标位移动画（兼容多行与中文输入法）'],
+          mascot: ['输入框像素螃蟹 Clawd', '19 套双层像素动画，跟随思考/运行/报错交互反应', [['crab', '开启 Clawd'], ['off', '关闭']]],
+          homeRipple: ['首页字符矩阵波纹', '首页背景点击扩散交互式二维字符水波'],
+        },
       },
-      {
-        title: '像素小螃蟹 Clawd 与思考滑块',
-        items: [
-          { key: 'mascot', label: 'Clawd 挂件', desc: '19 套双层像素螃蟹交互动画', type: 'select', options: [
-            ['crab', '开启 Clawd'], ['off', '关闭']
-          ]},
-          { key: 'effortSliderStyle', label: '思考滑块风格', desc: '点击推理档位弹出的滑块样式', type: 'select', options: [
-            ['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']
-          ]},
-          { key: 'effortAccent', label: '蓝紫推理色阶', desc: 'Claude 模式下启用蓝紫渐变', type: 'boolean' },
-          { key: 'performanceBackdrop', label: '梁武峰人像背景', desc: '31 帧 WebP 抠像背景渲染范围', type: 'select', options: [
-            ['card', '卡片内'], ['page', '全窗口'], ['off', '关闭']
-          ]}
-        ]
+      'zh-TW': {
+        loading: '載入中…',
+        checking: '偵測中',
+        connected: (port, n) => `CDP :${port} · ${n} 視窗`,
+        waitingPort: '等待偵錯連接埠',
+        disconnected: '未連線 CDP',
+        watcherOn: (pid) => `守護中 (PID ${pid})`,
+        watcherOff: '守護未執行',
+        readFailed: '讀取失敗',
+        cdpTitle: '需重新啟動 Antigravity 以啟用本機偵錯連接埠',
+        cdpDesc: 'Antigravity 2.33.0+ 預設關閉偵錯連接埠。外掛已寫入 --remote-debugging-port=0，可點擊下方按鈕一鍵重啟或手動重開。',
+        cdpDescMac: 'macOS .app 具簽章保護，不會改動套件內容。點擊下方按鈕即可一鍵重啟 Antigravity 並附加 --remote-debugging-port=0。',
+        launcherReady: (n) => `啟動器診斷：已為 ${n} 個啟動入口寫入偵錯參數`,
+        launcherPending: '啟動器診斷：未偵測到標準捷徑，建議直接點擊下方按鈕帶參重啟',
+        btnRelaunch: '一鍵重啟並啟用偵錯連接埠',
+        relaunching: '正在重啟 Antigravity 並開啟偵錯連接埠…',
+        relaunchFail: (e) => `重啟失敗: ${e}`,
+        btnReinject: '立即注入 / 重新整理',
+        btnRemove: '無痕還原預設',
+        btnReset: '重設預設設定',
+        btnRefresh: '重新整理狀態',
+        actionOk: (l) => `${l}完成`,
+        actionFail: (l, e) => `${l}失敗: ${e}`,
+        savedToast: (k) => `已更新 ${k}（即時熱更新）`,
+        invalidToast: (k) => `設定 ${k} 驗證失敗`,
+        saveErrToast: (e) => `儲存失敗: ${e}`,
+        grpAppearance: '外觀與版面（共 8 項）',
+        grpInteraction: '互動與思考滑桿（共 6 項）',
+        items: {
+          language: ['介面語言', '5 語言全介面在地化（保留程式碼與對話正文）', [['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']]],
+          homeLayout: ['首頁版面', '切換新對話首頁版面：Studio 儀表板 / 置中 / 原生', [['studio', '儀表板 Studio'], ['classic', '置中經典'], ['off', '原生']]],
+          palette: ['配色方案', 'Obsidian 深邃藍黑 / Claude 暖炭灰 / 跟隨宿主', [['obsidian', '深邃藍黑'], ['claude', 'Claude 暖灰'], ['host', '跟隨宿主']]],
+          logoInk: ['Antigravity Logo 著色', '首頁頂部拱形 Logo 線條顏色風格', [['accent', '主題強調色'], ['foreground', '前景色']]],
+          sidebarRestyle: ['側邊欄 Claude 風格', '統一側邊欄行高與懸停高亮底板'],
+          sidebarCompact: ['側邊欄緊湊密度', '收緊側邊欄行高與群組間距'],
+          composerRestyle: ['極簡輸入框重排', '圓角輸入區與底部無邊框控制列'],
+          placeholderStyle: ['輸入框佔位提示', '顯示 Studio 引導語或保留宿主原生提示', [['studio', 'Claude 風格'], ['host', '原生文案']]],
+          effortSliderStyle: ['思考強度滑桿風格', '點擊思考等級徽章彈出的互動調節器', [['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']]],
+          effortAccent: ['Claude 推理色階強調', '於 Claude 模式套用藍紫漸層強調色'],
+          performanceBackdrop: ['梁武峰效能人像背景', '31 影格去背人像背景顯示位置', [['card', '僅滑桿卡片'], ['page', '全視窗背景'], ['off', '關閉']]],
+          smoothCaret: ['打字游標流暢滑動', '輸入欄游標平滑補間動畫'],
+          mascot: ['像素螃蟹掛件 Clawd', '19 套雙層像素動畫，隨執行/思考/錯誤互動', [['crab', '開啟 Clawd'], ['off', '關閉']]],
+          homeRipple: ['首頁字元矩陣波紋', '點擊首頁背景觸發字元水波擴散'],
+        },
       },
-      {
-        title: 'Token HUD 与遥测显示',
-        items: [
-          { key: 'inlineStats', label: '内嵌统计与小圆环', desc: '开启右下角剩余容量圆环与浮窗', type: 'boolean' },
-          { key: 'ringMode', label: '圆环指标模式', desc: '显示上下文剩余或模型配额剩余', type: 'select', options: [
-            ['context', '上下文剩余'], ['quota', '模型配额剩余']
-          ]},
-          { key: 'turnBadges', label: '每轮 Token 徽章', desc: '在每轮回复底部展示速率与 Token 增量', type: 'boolean' },
-          { key: 'hudTopBar', label: '输入框顶部进度条', desc: '显示上下文占用顶部细条', type: 'boolean' },
-          { key: 'hudBottomBar', label: '输入框底部 HUD 栏', desc: '在底栏展开详细遥测信息', type: 'boolean' },
-          { key: 'hudRimProgress', label: '边框环绕进度条', desc: '沿输入框外框展示用量进度', type: 'boolean' },
-          { key: 'hudFooterChip', label: '底栏容量胶囊', desc: '显示剩余容量紧凑胶囊标签', type: 'boolean' },
-          { key: 'hudCompact', label: 'HUD 紧凑排版', desc: '缩小遥测栏与徽章内边距', type: 'boolean' }
-        ]
-      }
+      yue: {
+        loading: '載入緊…',
+        checking: '檢查緊',
+        connected: (port, n) => `CDP :${port} · ${n} 個視窗`,
+        waitingPort: '等緊除錯埠',
+        disconnected: '未連上 CDP',
+        watcherOn: (pid) => `守護緊 (PID ${pid})`,
+        watcherOff: '守護停咗',
+        readFailed: '讀取失敗',
+        cdpTitle: '要重開一次 Antigravity 先至用到除錯埠',
+        cdpDesc: 'Antigravity 2.33.0+ 預設閂咗除錯埠。插件已經加咗 --remote-debugging-port=0，撳下面粒掣即可一鍵重開。',
+        cdpDescMac: 'macOS .app 有簽名保護唔改套件入面內容。撳下面粒掣就可以一鍵重開 Antigravity 並帶 --remote-debugging-port=0。',
+        launcherReady: (n) => `啟動器診斷：已為 ${n} 個啟動入口加咗除錯參數`,
+        launcherPending: '啟動器診斷：未搵到標準捷徑，建議直接撳下面粒掣帶參數重開',
+        btnRelaunch: '一鍵重開並開啟除錯埠',
+        relaunching: '重開緊 Antigravity 並開啟除錯埠…',
+        relaunchFail: (e) => `重開失敗: ${e}`,
+        btnReinject: '即刻注入 / 刷新',
+        btnRemove: '無痕還原原版',
+        btnReset: '重設做預設值',
+        btnRefresh: '刷新狀態',
+        actionOk: (l) => `${l}搞掂`,
+        actionFail: (l, e) => `${l}失敗: ${e}`,
+        savedToast: (k) => `已更新 ${k}（即時生效）`,
+        invalidToast: (k) => `設定 ${k} 校驗失敗`,
+        saveErrToast: (e) => `儲存失敗: ${e}`,
+        grpAppearance: '外觀同版面（共 8 項）',
+        grpInteraction: '互動同思考滑桿（共 6 項）',
+        items: {
+          language: ['介面語言', '5 語言全介面本地化（唔郁代碼同正文）', [['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']]],
+          homeLayout: ['首頁版面', '切換新對話首頁：Studio 看板 / 置中 / 原生', [['studio', '儀表板 Studio'], ['classic', '置中經典'], ['off', '原生']]],
+          palette: ['配色方案', 'Obsidian 深邃藍黑 / Claude 暖灰 / 跟隨宿主', [['obsidian', '深邃藍黑'], ['claude', 'Claude 暖灰'], ['host', '跟隨宿主']]],
+          logoInk: ['Logo 顏色', '首頁拱形 Logo 線條顏色', [['accent', '主題色'], ['foreground', '前景色']]],
+          sidebarRestyle: ['側欄 Claude 風格', '套用 Claude 風格行距同高亮效果'],
+          sidebarCompact: ['側欄緊湊密度', '收窄側欄行距，一屏睇多幾行'],
+          composerRestyle: ['極簡輸入框重排', '純圓角輸入區加無邊框控制欄'],
+          placeholderStyle: ['輸入框提示字', '用 Studio 引導語定保留原版提示', [['studio', 'Claude 風格'], ['host', '原版文案']]],
+          effortSliderStyle: ['思考滑桿風格', '撳思考等級時彈出邊款調節器', [['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']]],
+          effortAccent: ['Claude 藍紫漸變色', '喺 Claude 模式開藍紫梯度色階'],
+          performanceBackdrop: ['梁武峰人像背景', '31 格人像背景顯示喺邊', [['card', '只限卡片'], ['page', '全視窗'], ['off', '關閉']]],
+          smoothCaret: ['順滑打字光標', '輸入欄光標順滑移動動畫'],
+          mascot: ['像素蟹仔 Clawd', '19 套像素動畫，隨思考/執行/出錯反應', [['crab', '開啟 Clawd'], ['off', '關閉']]],
+          homeRipple: ['首頁字符波紋海', '撳首頁背景會擴散二维字符水波'],
+        },
+      },
+      en: {
+        loading: 'Loading...',
+        checking: 'Checking',
+        connected: (port, n) => `CDP :${port} · ${n} window${n === 1 ? '' : 's'}`,
+        waitingPort: 'Waiting for CDP port',
+        disconnected: 'CDP not connected',
+        watcherOn: (pid) => `Watcher alive (PID ${pid})`,
+        watcherOff: 'Watcher stopped',
+        readFailed: 'Failed to load',
+        cdpTitle: 'Restart Antigravity once to enable local CDP injection',
+        cdpDesc: 'Antigravity 2.33.0+ disables CDP by default. Added --remote-debugging-port=0 to launchers; click below to relaunch immediately.',
+        cdpDescMac: 'macOS .app bundles are signed and left untouched. Click below to relaunch Antigravity with --remote-debugging-port=0 once.',
+        launcherReady: (n) => `Launcher check: ${n} entry point(s) configured with debug flag`,
+        launcherPending: 'Launcher check: no shortcut detected; use one-click relaunch below',
+        btnRelaunch: 'Relaunch with CDP Port',
+        relaunching: 'Relaunching Antigravity with CDP debugging enabled...',
+        relaunchFail: (e) => `Relaunch failed: ${e}`,
+        btnReinject: 'Re-inject / Refresh',
+        btnRemove: 'Restore Vanilla UI',
+        btnReset: 'Reset Defaults',
+        btnRefresh: 'Refresh Status',
+        actionOk: (l) => `${l} complete`,
+        actionFail: (l, e) => `${l} failed: ${e}`,
+        savedToast: (k) => `Updated ${k} (hot-reloaded)`,
+        invalidToast: (k) => `Invalid value for ${k}`,
+        saveErrToast: (e) => `Save failed: ${e}`,
+        grpAppearance: 'Appearance & Layout (8)',
+        grpInteraction: 'Slider, Caret & Mascot (6)',
+        items: {
+          language: ['Interface Language', '5-language UI localization (preserves code & chat prose)', [['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']]],
+          homeLayout: ['Home Layout', 'Switch new-conversation home layout', [['studio', 'Studio'], ['classic', 'Classic'], ['off', 'Off']]],
+          palette: ['Color Palette', 'Pick Obsidian, Claude Charcoal, or follow host theme', [['obsidian', 'Obsidian'], ['claude', 'Claude'], ['host', 'Host']]],
+          logoInk: ['Logo Color', 'Tint of the Antigravity greeting mark', [['accent', 'Accent'], ['foreground', 'Ink']]],
+          sidebarRestyle: ['Sidebar Restyle', 'Apply Claude-style row height and hover plates'],
+          sidebarCompact: ['Compact Sidebar', 'Tighten sidebar spacing to fit more items'],
+          composerRestyle: ['Composer Restyle', 'Minimalist rounded input box + borderless footer'],
+          placeholderStyle: ['Composer Placeholder', 'Show Studio placeholder prompt or keep native host copy', [['studio', 'Studio'], ['host', 'Host']]],
+          effortSliderStyle: ['Effort Slider Style', 'Popover style when clicking the effort pill', [['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', 'Liang Wufeng']]],
+          effortAccent: ['Claude Effort Accent', 'Blue-violet tint ramp on Claude slider & dot matrix'],
+          performanceBackdrop: ['Liang Wufeng Backdrop', 'Where the 31-frame cutout portrait renders', [['card', 'Card'], ['page', 'Window'], ['off', 'Off']]],
+          smoothCaret: ['Smooth Typing Caret', 'Gliding caret interpolation (multiline & IME safe)'],
+          mascot: ['Pixel Crab Clawd', '19 dual-layer animations reacting to agent activity', [['crab', 'On'], ['off', 'Off']]],
+          homeRipple: ['Home Matrix Ripple', 'Interactive 2D ASCII ripple field on home view'],
+        },
+      },
+      ja: {
+        loading: '読み込み中…',
+        checking: '確認中',
+        connected: (port, n) => `CDP :${port} · ${n} ウィンドウ`,
+        waitingPort: 'CDP ポート待機中',
+        disconnected: 'CDP 未接続',
+        watcherOn: (pid) => `常駐監視中 (PID ${pid})`,
+        watcherOff: '監視停止中',
+        readFailed: '読み込み失敗',
+        cdpTitle: 'CDP ポートを有効化するため Antigravity の再起動が必要です',
+        cdpDesc: 'Antigravity 2.33.0+ は既定で CDP を無効化します。--remote-debugging-port=0 を設定済みのため、下のボタンから再起動できます。',
+        cdpDescMac: 'macOS の .app は署名保護のため変更しません。下のボタンから --remote-debugging-port=0 付きで Antigravity を再起動できます。',
+        launcherReady: (n) => `ランチャー診断: ${n} 件の起動項目を設定済み`,
+        launcherPending: 'ランチャー診断: ショートカット未検出。下のボタンから再起動してください',
+        btnRelaunch: 'CDP ポート有効化で再起動',
+        relaunching: 'デバッグポート有効で Antigravity を再起動しています…',
+        relaunchFail: (e) => `再起動失敗: ${e}`,
+        btnReinject: '今すぐ注入 / 更新',
+        btnRemove: '標準 UI に戻す',
+        btnReset: '初期設定に戻す',
+        btnRefresh: '状態を再読込',
+        actionOk: (l) => `${l}完了`,
+        actionFail: (l, e) => `${l}失敗: ${e}`,
+        savedToast: (k) => `${k} を更新しました（即時反映）`,
+        invalidToast: (k) => `${k} の値が無効です`,
+        saveErrToast: (e) => `保存エラー: ${e}`,
+        grpAppearance: '外観とレイアウト (8)',
+        grpInteraction: 'スライダー・カーソル・マスコット (6)',
+        items: {
+          language: ['表示言語', 'UI 全体を 5 言語に切り替え（コードと本文は除外）', [['zh-CN', '简体中文'], ['zh-TW', '繁體中文'], ['yue', '粵語'], ['en', 'English'], ['ja', '日本語']]],
+          homeLayout: ['ホームレイアウト', '新しい会話ホームの表示レイアウト', [['studio', 'スタジオ'], ['classic', 'クラシック'], ['off', '標準']]],
+          palette: ['カラーパレット', 'Obsidian / Claude / ホストテーマ連動', [['obsidian', 'Obsidian'], ['claude', 'Claude'], ['host', 'ホスト連動']]],
+          logoInk: ['ロゴカラー', 'ホーム上部ロゴの色調スタイル', [['accent', 'アクセント'], ['foreground', '前景色']]],
+          sidebarRestyle: ['サイドバー調整', 'Claude 風の行高とホバー表示を適用'],
+          sidebarCompact: ['コンパクトサイドバー', 'サイドバーの行間と余白を詰めて一覧性を向上'],
+          composerRestyle: ['入力欄リスタイル', '丸みのある入力ボックスとフッター構成'],
+          placeholderStyle: ['入力欄プレースホルダー', 'Studio の案内文または標準文言を選択', [['studio', 'スタジオ'], ['host', '標準']]],
+          effortSliderStyle: ['推論スライダースタイル', '推論レベルクリック時に開くスライダー', [['claude', 'Claude Code'], ['chatgpt', 'ChatGPT Codex'], ['liangwufeng', '梁武峰']]],
+          effortAccent: ['Claude 推論カラー強調', 'Claude モードで青紫グラデーションを使用'],
+          performanceBackdrop: ['梁武峰 ポートレート背景', '31 フレーム背景の表示位置', [['card', 'カード内'], ['page', 'ウィンドウ全体'], ['off', 'オフ']]],
+          smoothCaret: ['スムーズ入力カーソル', '入力カーソル移動の補間アニメーション'],
+          mascot: ['ピクセルカニ Clawd', '19 種のアニメーションで状態に反応', [['crab', 'オン'], ['off', 'オフ']]],
+          homeRipple: ['ホーム文字リップル', 'ホーム背景クリックで文字グリッドの波紋を再生'],
+        },
+      },
+    };
+
+    const GROUP_DEFS = [
+      { id: 'appearance', titleKey: 'grpAppearance', keys: ['language', 'homeLayout', 'palette', 'logoInk', 'sidebarRestyle', 'sidebarCompact', 'composerRestyle', 'placeholderStyle'] },
+      { id: 'interaction', titleKey: 'grpInteraction', keys: ['effortSliderStyle', 'effortAccent', 'performanceBackdrop', 'smoothCaret', 'mascot', 'homeRipple'] },
     ];
 
     const apiFetch = (url, opts) => {
@@ -269,8 +516,69 @@
       });
     };
 
-    let currentConfig = {};
+    let currentConfig = { language: 'zh-CN' };
+    let lastStatus = null;
     let toastTimer = null;
+
+    function getT() {
+      const lang = currentConfig?.language;
+      return TEXTS[lang] || TEXTS['zh-CN'];
+    }
+
+    function parseColorLuminance(raw) {
+      const s = String(raw || '').trim();
+      if (!s) return null;
+      let r, g, b;
+      const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+      if (hex) {
+        const h = hex[1];
+        if (h.length === 3) {
+          r = parseInt(h[0] + h[0], 16);
+          g = parseInt(h[1] + h[1], 16);
+          b = parseInt(h[2] + h[2], 16);
+        } else {
+          r = parseInt(h.slice(0, 2), 16);
+          g = parseInt(h.slice(2, 4), 16);
+          b = parseInt(h.slice(4, 6), 16);
+        }
+        return 0.299 * r + 0.587 * g + 0.114 * b;
+      }
+      const rgb = s.match(/^rgba?\(\s*([\d.]+)\s*[,\s]\s*([\d.]+)\s*[,\s]\s*([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)$/i);
+      if (rgb) {
+        if (rgb[4] !== undefined && Number(rgb[4]) === 0) return null;
+        return 0.299 * Number(rgb[1]) + 0.587 * Number(rgb[2]) + 0.114 * Number(rgb[3]);
+      }
+      return null;
+    }
+
+    function syncHostThemeAttr(overrideBg) {
+      const candidates = [
+        overrideBg,
+        getComputedStyle(document.documentElement).getPropertyValue('--background'),
+        document.body ? getComputedStyle(document.body).backgroundColor : '',
+      ];
+      for (const cand of candidates) {
+        const lum = parseColorLuminance(cand);
+        if (lum !== null) {
+          document.documentElement.setAttribute('data-theme', lum < 140 ? 'dark' : 'light');
+          return;
+        }
+      }
+      const bCls = document.body?.className || '';
+      const hCls = document.documentElement?.className || '';
+      if (/\btheme-light\b|\blight-theme\b/i.test(bCls + ' ' + hCls)) {
+        document.documentElement.setAttribute('data-theme', 'light');
+        return;
+      }
+      if (/\btheme-dark\b|\bdark-theme\b/i.test(bCls + ' ' + hCls)) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        return;
+      }
+      if (typeof window.matchMedia === 'function') {
+        const isLight = window.matchMedia('(prefers-color-scheme: light)').matches;
+        document.documentElement.setAttribute('data-theme', isLight ? 'light' : 'dark');
+      }
+    }
 
     function showToast(msg) {
       const el = document.getElementById('toast');
@@ -280,49 +588,106 @@
       toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
     }
 
+    function renderStaticChrome() {
+      const t = getT();
+      document.documentElement.lang = currentConfig?.language === 'yue' ? 'zh-HK' : (currentConfig?.language || 'zh-CN');
+      document.getElementById('btn-reinject').textContent = t.btnReinject;
+      document.getElementById('btn-remove').textContent = t.btnRemove;
+      document.getElementById('btn-reset').textContent = t.btnReset;
+      document.getElementById('btn-refresh').textContent = t.btnRefresh;
+      document.getElementById('btn-relaunch').textContent = t.btnRelaunch;
+      document.getElementById('cdp-banner-title').textContent = t.cdpTitle;
+      const isMacSigned = lastStatus?.launcher?.reason === 'macos_app_bundle_signed';
+      document.getElementById('cdp-banner-desc').textContent = isMacSigned ? t.cdpDescMac : t.cdpDesc;
+      const metaBanner = document.getElementById('cdp-banner-meta');
+      const relaunchBtn = document.getElementById('btn-relaunch');
+      if (lastStatus) {
+        const st = lastStatus;
+        const dot = document.getElementById('status-dot');
+        const txt = document.getElementById('status-text');
+        const meta = document.getElementById('meta-line');
+        const hasCdp = st.cdp && st.cdp.port && st.cdp.pageCount > 0;
+        dot.classList.toggle('ok', Boolean(hasCdp));
+        txt.textContent = hasCdp
+          ? t.connected(st.cdp.port, st.cdp.pageCount)
+          : st.watcher?.alive ? t.waitingPort : t.disconnected;
+        meta.textContent = `v${st.version || '1.0.0'} · ${st.watcher?.alive ? t.watcherOn(st.watcher.pid) : t.watcherOff}`;
+        const showBanner = Boolean(st.cdp?.needsCdpRestart);
+        document.getElementById('cdp-banner').classList.toggle('show', showBanner);
+        if (metaBanner) {
+          if (showBanner && st.launcher?.checked && !isMacSigned) {
+            const cnt = Number(st.launcher.configuredCount || 0);
+            metaBanner.textContent = cnt > 0 ? t.launcherReady(cnt) : t.launcherPending;
+            metaBanner.style.display = 'block';
+          } else {
+            metaBanner.textContent = '';
+            metaBanner.style.display = 'none';
+          }
+        }
+        if (relaunchBtn) {
+          relaunchBtn.style.display = st.cdp?.canRelaunch === false ? 'none' : '';
+        }
+      } else {
+        document.getElementById('meta-line').textContent = t.loading;
+        document.getElementById('status-text').textContent = t.checking;
+        if (metaBanner) metaBanner.style.display = 'none';
+      }
+    }
+
     function renderForm(cfg) {
+      const t = getT();
       const container = document.getElementById('sections');
       container.innerHTML = '';
-      for (const group of GROUPS) {
+      for (const group of GROUP_DEFS) {
         const sec = document.createElement('div');
         sec.className = 'section';
         const h = document.createElement('div');
         h.className = 'section-title';
-        h.textContent = group.title;
+        h.textContent = t[group.titleKey];
         sec.appendChild(h);
 
-        for (const item of group.items) {
+        for (const key of group.keys) {
+          const itemDef = t.items[key];
+          if (!itemDef) continue;
+          const [labelText, descText, options] = itemDef;
           const row = document.createElement('div');
           row.className = 'row';
+          row.setAttribute('data-row-key', key);
+          if (key === 'effortAccent' && cfg.effortSliderStyle !== 'claude') {
+            row.classList.add('is-dimmed');
+          }
+          if (key === 'performanceBackdrop' && cfg.effortSliderStyle !== 'liangwufeng') {
+            row.classList.add('is-dimmed');
+          }
 
           const label = document.createElement('div');
           label.className = 'row-label';
           const name = document.createElement('div');
           name.className = 'row-name';
-          name.textContent = item.label;
+          name.textContent = labelText;
           const desc = document.createElement('div');
           desc.className = 'row-desc';
-          desc.textContent = item.desc;
+          desc.textContent = descText;
           label.appendChild(name);
           label.appendChild(desc);
           row.appendChild(label);
 
-          if (item.type === 'boolean') {
+          if (!options) {
             const cb = document.createElement('input');
             cb.type = 'checkbox';
-            cb.checked = Boolean(cfg[item.key]);
-            cb.addEventListener('change', () => saveOne(item.key, cb.checked));
+            cb.checked = Boolean(cfg[key]);
+            cb.addEventListener('change', () => saveOne(key, cb.checked));
             row.appendChild(cb);
           } else {
             const sel = document.createElement('select');
-            for (const [val, text] of item.options) {
+            for (const [val, text] of options) {
               const opt = document.createElement('option');
               opt.value = val;
               opt.textContent = text;
-              if (cfg[item.key] === val) opt.selected = true;
+              if (cfg[key] === val) opt.selected = true;
               sel.appendChild(opt);
             }
-            sel.addEventListener('change', () => saveOne(item.key, sel.value));
+            sel.addEventListener('change', () => saveOne(key, sel.value));
             row.appendChild(sel);
           }
           sec.appendChild(row);
@@ -339,57 +704,85 @@
         });
         const data = await res.json();
         if (data.config) currentConfig = data.config;
-        showToast(data.ok ? `已更新 ${key}（热更新生效）` : `设置 ${key} 校验失败`);
+        renderStaticChrome();
+        renderForm(currentConfig);
+        const t = getT();
+        showToast(data.ok ? t.savedToast(key) : t.invalidToast(key));
       } catch (err) {
-        showToast('保存失败: ' + err.message);
+        showToast(getT().saveErrToast(err.message));
       }
     }
 
     async function refreshStatus() {
+      syncHostThemeAttr();
       try {
         const res = await apiFetch('/api/status', { method: 'GET' });
         const st = await res.json();
-        currentConfig = st.config || {};
+        lastStatus = st;
+        currentConfig = st.config || currentConfig;
+        renderStaticChrome();
         renderForm(currentConfig);
-
-        const dot = document.getElementById('status-dot');
-        const txt = document.getElementById('status-text');
-        const meta = document.getElementById('meta-line');
-        const hasCdp = st.cdp && st.cdp.port && st.cdp.pageCount > 0;
-        dot.classList.toggle('ok', Boolean(hasCdp));
-        if (hasCdp) {
-          txt.textContent = `CDP :${st.cdp.port} · ${st.cdp.pageCount} 窗口`;
-        } else {
-          txt.textContent = st.watcher?.alive ? '等待调试端口' : '未连接 CDP';
-        }
-        meta.textContent = `v${st.version || '1.0.0'} · ${st.watcher?.alive ? `守护中 (PID ${st.watcher.pid})` : '守护未运行'}`;
       } catch (err) {
-        document.getElementById('status-text').textContent = '读取失败';
+        const t = getT();
+        document.getElementById('status-text').textContent = t.readFailed;
         document.getElementById('meta-line').textContent = err.message;
       }
     }
 
-    async function postAction(path, label) {
+    async function postAction(path, labelKey) {
       const btns = document.querySelectorAll('.actions button');
       btns.forEach((b) => (b.disabled = true));
       try {
         const res = await apiFetch(path, { method: 'POST', body: '{}' });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || '操作失败');
-        showToast(`${label}完成`);
+        if (!res.ok) throw new Error(data.error || 'Error');
+        const t = getT();
+        showToast(t.actionOk(t[labelKey]));
         await refreshStatus();
       } catch (err) {
-        showToast(`${label}失败: ${err.message}`);
+        const t = getT();
+        showToast(t.actionFail(t[labelKey], err.message));
       } finally {
         btns.forEach((b) => (b.disabled = false));
       }
     }
 
-    document.getElementById('btn-reinject').addEventListener('click', () => postAction('/api/reinject', '注入刷新'));
-    document.getElementById('btn-remove').addEventListener('click', () => postAction('/api/remove', '恢复原版'));
-    document.getElementById('btn-reset').addEventListener('click', () => postAction('/api/reset', '重置配置'));
+    async function triggerRelaunch() {
+      const btn = document.getElementById('btn-relaunch');
+      if (btn) btn.disabled = true;
+      try {
+        const res = await apiFetch('/api/relaunch', { method: 'POST', body: '{}' });
+        const data = await res.json();
+        if (!res.ok || !data?.ok) throw new Error(data?.error || 'Error');
+        showToast(getT().relaunching);
+      } catch (err) {
+        showToast(getT().relaunchFail(err.message));
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    window.addEventListener('message', (ev) => {
+      if (ev.data?.type === 'theme-change') {
+        const bg = ev.data?.payload?.cssVariables?.['--background'];
+        syncHostThemeAttr(bg);
+        if (typeof requestAnimationFrame === 'function') {
+          requestAnimationFrame(() => syncHostThemeAttr());
+        }
+      }
+    });
+    if (typeof window.matchMedia === 'function') {
+      try {
+        window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => syncHostThemeAttr());
+      } catch {}
+    }
+
+    document.getElementById('btn-relaunch').addEventListener('click', triggerRelaunch);
+    document.getElementById('btn-reinject').addEventListener('click', () => postAction('/api/reinject', 'btnReinject'));
+    document.getElementById('btn-remove').addEventListener('click', () => postAction('/api/remove', 'btnRemove'));
+    document.getElementById('btn-reset').addEventListener('click', () => postAction('/api/reset', 'btnReset'));
     document.getElementById('btn-refresh').addEventListener('click', refreshStatus);
 
+    renderStaticChrome();
     refreshStatus();
   </script>
 </body>

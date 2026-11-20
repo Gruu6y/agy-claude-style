@@ -301,8 +301,30 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
   sandbox.globalThis = sandbox;
 
   try {
+    // Seed stale legacy HUD / turn-bar / orphan crab nodes and verify mount immediately cleans them up
+    const staleTurnBar = makeNode('div', { className: 'ag-cs-turn-bar' });
+    body.appendChild(staleTurnBar);
+    const staleStats = makeNode('div', { className: 'ag-cs-inline-stats' });
+    footer.appendChild(staleStats);
+    const orphanCrab = makeNode('span', { className: 'ag-cs-crab' });
+    card.appendChild(orphanCrab);
+    const { pollIntervalMs: _poll, ...baseFileCfg } = cdp.DEFAULT_CONFIG;
+    sandbox.localStorage.setItem(
+      'agClaudeStyle.lastFileConfig.v1',
+      JSON.stringify({ ...baseFileCfg, sidebarCompact: false })
+    );
+    sandbox.localStorage.setItem(
+      'agClaudeStyle.settings.v1',
+      JSON.stringify({ ...cdp.DEFAULT_CONFIG, sidebarCompact: true, turnBadges: true })
+    );
+
     const res = vm.runInNewContext(cdp.buildInjectExpression(cdp.DEFAULT_CONFIG), sandbox);
     assert.equal(res.status, 'ok');
+    assert.equal(body.querySelector('.ag-cs-turn-bar'), null);
+    assert.equal(footer.querySelector('.ag-cs-inline-stats'), null);
+    assert.equal(card.querySelectorAll('.ag-cs-crab').length, 1);
+    assert.notEqual(card.querySelector('.ag-cs-crab'), orphanCrab);
+    assert.equal(html.getAttribute('data-ag-cs-sidebar-compact'), 'on');
     assert.equal(html.getAttribute('data-ag-cs-style'), '1');
     assert.equal(html.getAttribute('data-ag-cs-palette'), 'obsidian');
     assert.equal(html.getAttribute('data-ag-cs-home'), 'studio');
@@ -401,37 +423,18 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
     assert.equal(lwfPop.innerHTML.includes('ag-cs-effort-style-switch'), false);
     assert.ok(body.querySelector('.ag-cs-perf-backdrop'));
 
-    // Context HUD popover opens cleanly with NO embedded settings controls, concise tab names, and clamps maxHeight on short viewports
-    sandbox.window.innerHeight = 650;
-    const origAnchorRect = modelBtn.getBoundingClientRect;
-    modelBtn.getBoundingClientRect = () => ({ left: 260, top: 560, right: 390, bottom: 584, width: 130, height: 24 });
-    sandbox.window.__agClaudeStyle.openContextPopover(modelBtn, 'quotas');
-    const ctxPop = body.querySelector('.ag-cs-ctx-popover');
-    assert.ok(ctxPop);
-    assert.equal(ctxPop.style.maxHeight, '544px');
-    assert.ok(parseInt(ctxPop.style.top, 10) + 300 <= 560);
-    modelBtn.getBoundingClientRect = origAnchorRect;
-    sandbox.window.innerHeight = 900;
-    assert.ok(ctxPop.innerHTML.includes('模型配额'));
-    assert.ok(ctxPop.innerHTML.includes('工具/代理 (0)'));
-    assert.equal(ctxPop.innerHTML.includes('ag-cs-ctx-settings-list'), false);
-    assert.equal(ctxPop.innerHTML.includes('Token HUD 与圆环快捷设置'), false);
-    assert.equal(ctxPop.innerHTML.includes('data-hud-key'), false);
-
-    // Settings section must mount ONLY in Appearance, NOT General, grouped cleanly into 3 cards + collapsible HUD details
+    // Settings section must mount ONLY in Appearance, NOT General, grouped cleanly into 2 cards (14 controls, zero HUD clutter)
     assert.equal(generalPanel.querySelector('#ag-cs-settings-sec'), null);
     const settingsSec = appearancePanel.querySelector('#ag-cs-settings-sec');
     assert.ok(settingsSec);
     assert.equal(settingsSec.querySelector('h3')?.textContent, 'AGY Claude Style (agy-claude-style)');
     const settingGroups = settingsSec.querySelectorAll('.ag-cs-settings-group');
-    assert.equal(settingGroups.length, 3);
+    assert.equal(settingGroups.length, 2);
     assert.deepEqual(
       settingGroups.map((g) => g.getAttribute('data-ag-cs-group')),
-      ['appearance', 'interaction', 'telemetry']
+      ['appearance', 'interaction']
     );
-    const hudDetails = settingsSec.querySelector('.ag-cs-settings-details');
-    assert.ok(hudDetails);
-    assert.equal(hudDetails.hasAttribute('open'), false);
+    assert.equal(settingsSec.querySelector('.ag-cs-settings-details'), null);
     const claudeCondRow = settingsSec.querySelector('[data-ag-cs-cond="claude"]');
     const lwfCondRow = settingsSec.querySelector('[data-ag-cs-cond="liangwufeng"]');
     assert.equal(claudeCondRow?.getAttribute('data-ag-cs-dim'), '1'); // because liangwufeng is currently active
@@ -440,20 +443,26 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
     const settingKeys = new Set(
       appearancePanel.querySelectorAll('#ag-cs-settings-sec button').map((b) => b.getAttribute('data-ag-cs-key'))
     );
-    assert.equal(settingKeys.size, 20);
+    assert.equal(settingKeys.size, 14);
     for (const expectedKey of [
       'language',
       'homeLayout',
       'palette',
       'logoInk',
       'sidebarRestyle',
+      'sidebarCompact',
       'composerRestyle',
+      'placeholderStyle',
       'effortSliderStyle',
       'effortAccent',
       'performanceBackdrop',
       'smoothCaret',
       'mascot',
       'homeRipple',
+    ]) {
+      assert.ok(settingKeys.has(expectedKey), `Missing settings control for ${expectedKey}`);
+    }
+    for (const removedKey of [
       'inlineStats',
       'ringMode',
       'turnBadges',
@@ -463,7 +472,7 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
       'hudFooterChip',
       'hudCompact',
     ]) {
-      assert.ok(settingKeys.has(expectedKey), `Missing settings control for ${expectedKey}`);
+      assert.equal(settingKeys.has(removedKey), false, `Removed HUD control ${removedKey} must not appear in settings`);
     }
 
     // Verify all 5 language buttons exist in Appearance settings and clicking switches UI + emits CDP binding
@@ -484,7 +493,7 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
       ]
     );
 
-    const checkLangSwitch = (targetLang, hostTitle, expectedSettingsLangTitle, expectedOverviewTab, expectedPlaceholder, expectedQuotaTab) => {
+    const checkLangSwitch = (targetLang, hostTitle, expectedSettingsLangTitle, expectedOverviewTab, expectedPlaceholder) => {
       appearanceH2.textContent = hostTitle;
       const btn = getLangBtns().find((b) => b.getAttribute('data-ag-cs-val') === JSON.stringify(targetLang));
       assert.ok(btn, `Expected language button for ${targetLang}`);
@@ -496,19 +505,20 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
       assert.equal(secNow.querySelector('[data-ag-cs-row="language"] [data-k="t"]')?.textContent, expectedSettingsLangTitle);
       assert.equal(home.querySelector('.ag-cs-home-tab[data-tab="overview"]')?.textContent, expectedOverviewTab);
       assert.equal(placeholder.getAttribute('data-ag-cs-placeholder'), expectedPlaceholder);
-      assert.ok(ctxPop.innerHTML.includes(expectedQuotaTab));
     };
 
-    checkLangSwitch('zh-TW', '外觀', '介面語言', '概覽', '描述任務或提出問題', '模型配額');
-    checkLangSwitch('yue', '外觀', '介面語言', '概覽', '寫低你想做嘅任務或者問題', '模型配額');
-    checkLangSwitch('en', 'Appearance', 'Interface Language', 'Overview', 'How can I help you today?', 'Quotas');
+    checkLangSwitch('zh-TW', '外觀', '介面語言', '概覽', '描述任務或提出問題');
+    checkLangSwitch('yue', '外觀', '介面語言', '概覽', '寫低你想做嘅任務或者問題');
+    checkLangSwitch('en', 'Appearance', 'Interface Language', 'Overview', 'How can I help you today?');
     assert.equal(html.hasAttribute('data-ag-cs-cjk'), false);
-    checkLangSwitch('ja', '外観', '表示言語', '概要', 'タスクの説明や質問を入力してください', 'クォータ');
+    checkLangSwitch('ja', '外観', '表示言語', '概要', 'タスクの説明や質問を入力してください');
     assert.equal(html.getAttribute('data-ag-cs-cjk'), '1');
-    checkLangSwitch('zh-CN', '外观', '界面语言', '概览', '描述任务或提出问题', '模型配额');
+    checkLangSwitch('zh-CN', '外观', '界面语言', '概览', '描述任务或提出问题');
 
     // Also verify live open Effort Popover refreshes across languages
-    sandbox.window.__agClaudeStyle.openEffortPopover(effortSpan, modelBtn);
+    if (!body.querySelector('.ag-cs-effort-popover')) {
+      sandbox.window.__agClaudeStyle.openEffortPopover(effortSpan, modelBtn);
+    }
     const activeLwfPop = body.querySelector('.ag-cs-effort-popover');
     assert.ok(activeLwfPop);
     assert.ok(activeLwfPop.innerHTML.includes('性能 · PERFORMANCE'));
@@ -542,12 +552,13 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
     assert.equal(appearancePanel.querySelector('[data-ag-cs-cond="claude"]')?.getAttribute('data-ag-cs-dim'), '1');
     assert.equal(appearancePanel.querySelector('[data-ag-cs-cond="liangwufeng"]')?.getAttribute('data-ag-cs-dim'), '1');
 
-    // Refreshing config externally syncs open Settings buttons & conditional row dimming immediately
+    // Refreshing config externally syncs open Settings buttons, overrides stale localStorage & updates conditional dimming
     doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, palette: 'claude' });
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, palette: 'claude', sidebarCompact: false });
     await new Promise((r) => setTimeout(r, 80));
     doc.hidden = false;
     assert.equal(html.getAttribute('data-ag-cs-palette'), 'claude');
+    assert.equal(html.getAttribute('data-ag-cs-sidebar-compact'), 'off');
     assert.equal(html.getAttribute('data-ag-cs-effort-accent'), 'on');
     assert.equal(html.getAttribute('data-ag-cs-perf-backdrop'), 'card');
     assert.equal(appearancePanel.querySelector('[data-ag-cs-cond="claude"]')?.hasAttribute('data-ag-cs-dim'), false);
@@ -585,6 +596,7 @@ test('inject expression mounts and REMOVE_EXPRESSION cleanly tears down on simul
     assert.equal(home.querySelector('.ag-cs-ripple-host'), null);
     assert.equal(home.querySelector('.ag-cs-ripple-canvas'), null);
     assert.equal(card.querySelector('.ag-cs-crab'), null);
+    assert.equal(card.querySelectorAll('.ag-cs-crab').length, 0);
     assert.equal(dialog.querySelector('#ag-cs-settings-sec'), null);
   } finally {
     for (const id of timers) clearTimeout(id);
@@ -947,7 +959,7 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
 
     // 2. Switch to ChatGPT (Codex) mode: preserves "Extra" in value label, mounts 22 stars + nebula, responds to ArrowLeft/End
     doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'chatgpt', hudTopBar: true });
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'chatgpt' });
     await new Promise((r) => setTimeout(r, 80));
     doc.hidden = false;
 
@@ -963,7 +975,7 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
 
     // 2b. Switch to Liang Wufeng mode: preserves "Extra" in meta, verifies card scrim & translucent page backdrop, omits idle status until tick hover/click
     doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'liangwufeng', hudTopBar: true });
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'liangwufeng' });
     await new Promise((r) => setTimeout(r, 80));
     doc.hidden = false;
 
@@ -983,7 +995,7 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
     assert.ok(pop.querySelector('.ag-cs-perf-status'));
 
     doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'liangwufeng', performanceBackdrop: 'page', hudTopBar: true });
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, effortSliderStyle: 'liangwufeng', performanceBackdrop: 'page' });
     await new Promise((r) => setTimeout(r, 80));
     doc.hidden = false;
     const pageBgEl = pop.querySelector('.ag-cs-perf-card-bg');
@@ -1022,40 +1034,13 @@ test('effort popover uses clientWidth (immune to pop-in scale), preserves Extra 
   }
 });
 
-test('bottom-right context ring navigates directly to quotas or breakdown tab based on ringMode', async () => {
+test('Clawd pixel crab tracks trajectory activity without calling quota RPC or mounting removed HUD widgets', async () => {
   const timers = new Set();
   const makeEl = (tag, opts = {}) => {
     const attrs = new Map(Object.entries(opts.attrs || {}));
     const listeners = new Map();
     const children = [];
     const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
-    const parseAttrs = (str) => {
-      const out = {};
-      const re = /([a-zA-Z0-9_-]+)(?:="([^"]*)")?/g;
-      let m;
-      while ((m = re.exec(str))) out[m[1]] = m[2] ?? '';
-      return out;
-    };
-    const buildChildrenFromHtml = (parent, htmlStr) => {
-      parent.children.length = 0;
-      const stack = [parent];
-      const tokRe = /<\/([a-zA-Z0-9_-]+)>|<([a-zA-Z0-9_-]+)([^>]*?)(\/?)>|([^<]+)/g;
-      let tok;
-      while ((tok = tokRe.exec(htmlStr))) {
-        if (tok[1]) {
-          if (stack.length > 1) stack.pop();
-        } else if (tok[2]) {
-          const parsed = parseAttrs(tok[3] || '');
-          const child = makeEl(tok[2], { className: parsed.class || '', attrs: parsed });
-          stack[stack.length - 1].appendChild(child);
-          if (!tok[4]) stack.push(child);
-        } else if (tok[5]) {
-          const cur = stack[stack.length - 1];
-          const txt = tok[5].replace(/\s+/g, ' ');
-          if (txt.trim()) cur._text += txt;
-        }
-      }
-    };
     const matchesSimple = (n, s) => {
       let rest = s.trim();
       const tm = /^[a-zA-Z0-9_-]+/.exec(rest);
@@ -1104,9 +1089,8 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
       parentNode: null,
       isConnected: true,
       _text: opts.text || '',
-      _listeners: listeners,
-      clientWidth: 280,
-      offsetWidth: 280,
+      clientWidth: 480,
+      offsetWidth: 480,
       clientHeight: 30,
       offsetHeight: 30,
       style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, getPropertyValue(k) { return this._props[k] || ''; }, removeProperty(k) { delete this._props[k]; } },
@@ -1115,9 +1099,24 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
       set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
       get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
       set textContent(v) { children.length = 0; this._text = String(v); },
-      set innerHTML(v) { this._html = v; buildChildrenFromHtml(this, v); },
-      get innerHTML() { return this._html || ''; },
+      get firstChild() { return children[0] || null; },
+      get childElementCount() { return children.length; },
+      get nextSibling() {
+        if (!this.parentElement) return null;
+        const idx = this.parentElement.children.indexOf(this);
+        return idx >= 0 ? this.parentElement.children[idx + 1] || null : null;
+      },
+      get lastElementChild() { return children[children.length - 1] || null; },
+      getContext() { return null; },
       appendChild(c) { c.parentElement = this; c.parentNode = this; children.push(c); return c; },
+      insertBefore(c, ref) {
+        c.parentElement = this;
+        c.parentNode = this;
+        const idx = ref ? children.indexOf(ref) : -1;
+        if (idx >= 0) children.splice(idx, 0, c);
+        else children.push(c);
+        return c;
+      },
       removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); c.parentElement = null; c.parentNode = null; return c; },
       remove() { if (this.parentElement) this.parentElement.removeChild(this); },
       setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
@@ -1127,11 +1126,7 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
       toggleAttribute(k, f) { const on = f === undefined ? !attrs.has(k) : Boolean(f); if (on) attrs.set(k, ''); else attrs.delete(k); return on; },
       addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
       removeEventListener(ev, cb) { const a = listeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
-      dispatch(ev, extra = {}) {
-        const e = { type: ev, stopPropagation() {}, preventDefault() {}, ...extra };
-        for (const cb of [...(listeners.get(ev) || [])]) cb(e);
-      },
-      getBoundingClientRect() { return { left: 200, top: 600, right: 480, bottom: 630, width: 280, height: 30 }; },
+      getBoundingClientRect() { return { left: 200, top: 600, right: 680, bottom: 630, width: 480, height: 30 }; },
       animate() { return { cancel() {}, finished: Promise.resolve() }; },
       closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
       querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
@@ -1170,33 +1165,26 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
   convView.appendChild(inputBox);
   body.appendChild(convView);
 
-  const mockTraj = {
+  let stepCount = 2;
+  let currentStatus = 2;
+  let quotaCalls = 0;
+  let trajCalls = 0;
+  let currentTraj = {
     trajectory: {
       steps: [
         { status: 3, step: { case: 'userInput' } },
         { status: 1, step: { case: 'plannerResponse', value: {} } },
       ],
-      generatorMetadata: [
-        {
-          metadata: {
-            value: {
-              usage: { inputTokens: '2000', cacheReadTokens: '18000', outputTokens: '500', thinkingOutputTokens: '100' },
-              chatStartMetadata: {
-                contextWindowMetadata: { estimatedTokensUsed: 50000, maxContextTokens: 256000 },
-              },
-            },
-          },
-        },
-      ],
     },
   };
+
   inputBox.__reactFiber$test = {
     memoizedProps: {
       cascadeId,
       store: {
         getState: () => ({
-          cascadeTrajectorySummaries: {
-            [cascadeId]: { stepCount: 2, lastModifiedTime: '2026-11-14T10:00:00Z' },
+          trajectorySummaries: {
+            summaries: { [cascadeId]: { stepCount, status: currentStatus } },
           },
         }),
         subscribe: () => () => {},
@@ -1205,8 +1193,14 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
     dependencies: {
       firstContext: {
         memoizedValue: {
-          async getCascadeTrajectory() { return mockTraj; },
-          async retrieveUserQuotaSummary() { return { models: [] }; },
+          async getCascadeTrajectory() {
+            trajCalls += 1;
+            return currentTraj;
+          },
+          async retrieveUserQuotaSummary() {
+            quotaCalls += 1;
+            return { groups: [] };
+          },
         },
       },
     },
@@ -1241,276 +1235,6 @@ test('bottom-right context ring navigates directly to quotas or breakdown tab ba
     matchMedia: () => ({ matches: false }),
     MutationObserver: class { observe() {} disconnect() {} },
     ResizeObserver: class { observe() {} disconnect() {} },
-    requestAnimationFrame: () => 1,
-    cancelAnimationFrame: () => {},
-    setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
-    clearTimeout: (id) => { timers.delete(id); clearTimeout(id); },
-    setInterval: () => 1,
-    clearInterval: () => {},
-    performance: { now: () => Date.now() },
-    Math, Date, JSON, Map, Set, Array, Object, String, Number, Boolean, Promise, Uint8Array, Float32Array, Intl,
-  };
-  sandbox.window = sandbox;
-  sandbox.globalThis = sandbox;
-
-  try {
-    vm.runInNewContext(cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, ringMode: 'context' }), sandbox);
-    await new Promise((r) => setTimeout(r, 80));
-
-    const ringBtn = footer.querySelector('.ag-cs-context-ring');
-    assert.ok(ringBtn, 'Expected bottom-right context ring widget');
-
-    ringBtn.dispatch('click');
-    let pop = body.querySelector('.ag-cs-ctx-popover');
-    assert.equal(pop?.querySelector('.is-active')?.getAttribute('data-ctx-tab'), 'breakdown');
-    pop?.querySelector('.ag-cs-ctx-close')?.dispatch('click');
-
-    doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, ringMode: 'quota' });
-    await new Promise((r) => setTimeout(r, 80));
-    doc.hidden = false;
-
-    ringBtn.dispatch('click');
-    pop = body.querySelector('.ag-cs-ctx-popover');
-    assert.equal(pop?.querySelector('.is-active')?.getAttribute('data-ctx-tab'), 'quotas');
-
-    vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
-  } finally {
-    for (const id of timers) clearTimeout(id);
-  }
-});
-
-test('new conversation renders bottom-right ring and inline tokens info on home view and during Turn 1 (calls === 0)', async () => {
-  const timers = new Set();
-  const makeEl = (tag, opts = {}) => {
-    const attrs = new Map(Object.entries(opts.attrs || {}));
-    const listeners = new Map();
-    const children = [];
-    const classes = new Set((opts.className || '').split(/\s+/).filter(Boolean));
-    const parseAttrs = (str) => {
-      const out = {};
-      const re = /([a-zA-Z0-9_-]+)(?:="([^"]*)")?/g;
-      let m;
-      while ((m = re.exec(str))) out[m[1]] = m[2] ?? '';
-      return out;
-    };
-    const buildChildrenFromHtml = (parent, htmlStr) => {
-      parent.children.length = 0;
-      const stack = [parent];
-      const tokRe = /<\/([a-zA-Z0-9_-]+)>|<([a-zA-Z0-9_-]+)([^>]*?)(\/?)>|([^<]+)/g;
-      let tok;
-      while ((tok = tokRe.exec(htmlStr))) {
-        if (tok[1]) {
-          if (stack.length > 1) stack.pop();
-        } else if (tok[2]) {
-          const parsed = parseAttrs(tok[3] || '');
-          const child = makeEl(tok[2], { className: parsed.class || '', attrs: parsed });
-          stack[stack.length - 1].appendChild(child);
-          if (!tok[4]) stack.push(child);
-        } else if (tok[5]) {
-          const cur = stack[stack.length - 1];
-          const txt = tok[5].replace(/\s+/g, ' ');
-          if (txt.trim()) cur._text += txt;
-        }
-      }
-    };
-    const matchesSimple = (n, s) => {
-      let rest = s.trim();
-      const tm = /^[a-zA-Z0-9_-]+/.exec(rest);
-      if (tm) {
-        if (n.tagName !== tm[0].toUpperCase()) return false;
-        rest = rest.slice(tm[0].length);
-      }
-      while (rest) {
-        if (rest[0] === '#') {
-          const m = /^#([a-zA-Z0-9_-]+)/.exec(rest);
-          if (!m || n.id !== m[1]) return false;
-          rest = rest.slice(m[0].length);
-        } else if (rest[0] === '.') {
-          const m = /^\.([a-zA-Z0-9_-]+)/.exec(rest);
-          if (!m || !n.classList.contains(m[1])) return false;
-          rest = rest.slice(m[0].length);
-        } else if (rest[0] === '[') {
-          const m = /^\[([^\]=]+)(?:="([^"]*)")?\]/.exec(rest);
-          if (!m) return false;
-          const ok = m[2] === undefined ? n.hasAttribute(m[1]) : n.getAttribute(m[1]) === m[2];
-          if (!ok) return false;
-          rest = rest.slice(m[0].length);
-        } else {
-          return false;
-        }
-      }
-      return true;
-    };
-    const matchesChain = (n, selector) =>
-      selector.split(',').some((part) => {
-        const tokens = part.trim().split(/\s+/).filter(Boolean);
-        if (tokens.length === 0 || !matchesSimple(n, tokens[tokens.length - 1])) return false;
-        let cur = n.parentElement;
-        let idx = tokens.length - 2;
-        while (cur && idx >= 0) {
-          if (matchesSimple(cur, tokens[idx])) idx -= 1;
-          cur = cur.parentElement;
-        }
-        return idx < 0;
-      });
-    const node = {
-      tagName: tag.toUpperCase(),
-      id: attrs.get('id') || '',
-      children,
-      parentElement: null,
-      parentNode: null,
-      isConnected: true,
-      _text: opts.text || '',
-      _listeners: listeners,
-      clientWidth: 480,
-      offsetWidth: 480,
-      clientHeight: 30,
-      offsetHeight: 30,
-      style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, getPropertyValue(k) { return this._props[k] || ''; }, removeProperty(k) { delete this._props[k]; } },
-      classList: { contains: (c) => classes.has(c), add: (c) => classes.add(c), remove: (c) => classes.delete(c) },
-      get className() { return Array.from(classes).join(' '); },
-      set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
-      get textContent() { return children.length ? children.map((c) => c.textContent).join('') : this._text; },
-      set textContent(v) { children.length = 0; this._text = String(v); },
-      set innerHTML(v) { this._html = v; buildChildrenFromHtml(this, v); },
-      get innerHTML() { return this._html || ''; },
-      get firstChild() { return children[0] || null; },
-      get childElementCount() { return children.length; },
-      get nextSibling() {
-        if (!this.parentElement) return null;
-        const idx = this.parentElement.children.indexOf(this);
-        return idx >= 0 ? this.parentElement.children[idx + 1] || null : null;
-      },
-      get lastElementChild() { return children[children.length - 1] || null; },
-      getContext() { return null; },
-      appendChild(c) { c.parentElement = this; c.parentNode = this; children.push(c); return c; },
-      insertBefore(c, ref) {
-        c.parentElement = this;
-        c.parentNode = this;
-        const idx = ref ? children.indexOf(ref) : -1;
-        if (idx >= 0) children.splice(idx, 0, c);
-        else children.push(c);
-        return c;
-      },
-      removeChild(c) { const i = children.indexOf(c); if (i >= 0) children.splice(i, 1); c.parentElement = null; c.parentNode = null; return c; },
-      remove() { if (this.parentElement) this.parentElement.removeChild(this); },
-      setAttribute(k, v) { attrs.set(k, String(v)); if (k === 'id') node.id = String(v); },
-      getAttribute(k) { return attrs.has(k) ? attrs.get(k) : null; },
-      hasAttribute(k) { return attrs.has(k); },
-      removeAttribute(k) { attrs.delete(k); },
-      toggleAttribute(k, f) { const on = f === undefined ? !attrs.has(k) : Boolean(f); if (on) attrs.set(k, ''); else attrs.delete(k); return on; },
-      addEventListener(ev, cb) { if (!listeners.has(ev)) listeners.set(ev, []); listeners.get(ev).push(cb); },
-      removeEventListener(ev, cb) { const a = listeners.get(ev); if (a) { const i = a.indexOf(cb); if (i >= 0) a.splice(i, 1); } },
-      dispatch(ev, extra = {}) {
-        const e = { type: ev, stopPropagation() {}, preventDefault() {}, ...extra };
-        for (const cb of [...(listeners.get(ev) || [])]) cb(e);
-      },
-      getBoundingClientRect() { return { left: 200, top: 600, right: 680, bottom: 630, width: 480, height: 30 }; },
-      animate() { return { cancel() {}, finished: Promise.resolve() }; },
-      closest(sel) { let cur = this; while (cur) { if (matchesChain(cur, sel)) return cur; cur = cur.parentElement; } return null; },
-      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
-      querySelectorAll(sel) {
-        const out = [];
-        const walk = (n) => {
-          for (const c of n.children) {
-            if (matchesChain(c, sel)) out.push(c);
-            walk(c);
-          }
-        };
-        walk(this);
-        return out;
-      },
-    };
-    return node;
-  };
-
-  // Part A: New conversation Home view (.agy-home, no conversation-view, no cascadeId) with ringMode: 'quota'
-  const html = makeEl('html');
-  const head = makeEl('head');
-  const body = makeEl('body', { className: 'theme-dark' });
-  html.appendChild(head);
-  html.appendChild(body);
-
-  const home = makeEl('div', { className: 'agy-home' });
-  const greeting = makeEl('div', { attrs: { 'data-testid': 'home-greeting' } });
-  greeting.appendChild(makeEl('h1', { className: 'home-greeting-title', text: 'Welcome' }));
-  home.appendChild(greeting);
-
-  const inputBox = makeEl('div', { id: 'antigravity.agentSidePanelInputBox', attrs: { 'data-testid': 'agent-input-box' } });
-  const card = makeEl('div', { className: 'surface-composer-card' });
-  const editorEl = makeEl('div', { attrs: { contenteditable: 'true', 'data-lexical-editor': 'true' } });
-  const footer = makeEl('div', { className: 'agy-composer-footer' });
-  const modelBtn = makeEl('button', { attrs: { 'data-testid': 'model-selector-trigger' } });
-  modelBtn.appendChild(makeEl('span', { text: 'Gemini 4 Hydrogen' }));
-  modelBtn.appendChild(makeEl('span', { text: ' Extra' }));
-  footer.appendChild(modelBtn);
-  card.appendChild(editorEl);
-  card.appendChild(footer);
-  inputBox.appendChild(card);
-  home.appendChild(inputBox);
-  body.appendChild(home);
-
-  let currentCascadeId = '';
-  let currentStatus = 2;
-  let currentTraj = { trajectory: { steps: [], generatorMetadata: [] } };
-  const docListeners = new Map();
-  inputBox.__reactFiber$test = {
-    memoizedProps: {
-      get cascadeId() { return currentCascadeId; },
-      store: {
-        getState: () => ({
-          trajectorySummaries: { summaries: currentCascadeId ? { [currentCascadeId]: { stepCount: currentTraj.trajectory.steps.length, status: currentStatus } } : {} },
-          userStatus: {
-            cascadeModelConfigData: {
-              clientModelConfigs: [{ label: 'Gemini 4 Hydrogen (XHigh)', quotaInfo: { remainingFraction: 0.42 } }],
-            },
-          },
-        }),
-        subscribe: () => () => {},
-      },
-    },
-    dependencies: {
-      firstContext: {
-        memoizedValue: {
-          async getCascadeTrajectory() { return currentTraj; },
-          async retrieveUserQuotaSummary() {
-            return { groups: [{ displayName: 'Gemini', buckets: [{ window: '5h', remaining: { case: 'remainingFraction', value: 0.42 } }] }] };
-          },
-        },
-      },
-    },
-    return: null,
-  };
-
-  const doc = {
-    documentElement: html,
-    head,
-    body,
-    hidden: false,
-    readyState: 'complete',
-    createElement: (t) => makeEl(t),
-    getElementById: (id) => {
-      const find = (n) => (n.id === id ? n : n.children.map(find).find(Boolean) || null);
-      return find(html);
-    },
-    querySelector: (s) => html.querySelector(s),
-    querySelectorAll: (s) => html.querySelectorAll(s),
-    addEventListener(ev, fn) { if (!docListeners.has(ev)) docListeners.set(ev, []); docListeners.get(ev).push(fn); },
-    removeEventListener(ev, fn) { const a = docListeners.get(ev); if (a) { const i = a.indexOf(fn); if (i >= 0) a.splice(i, 1); } },
-  };
-
-  const sandbox = {
-    window: null,
-    globalThis: null,
-    document: doc,
-    navigator: { language: 'zh-CN' },
-    location: { pathname: '/' },
-    localStorage: { _m: {}, getItem(k) { return this._m[k] || null; }, setItem(k, v) { this._m[k] = String(v); } },
-    getComputedStyle: () => ({ getPropertyValue: () => '' }),
-    matchMedia: () => ({ matches: false }),
-    MutationObserver: class { observe() {} disconnect() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 5),
     cancelAnimationFrame: (id) => clearTimeout(id),
     setTimeout: (fn, ms) => { const id = setTimeout(fn, ms); timers.add(id); return id; },
@@ -1524,94 +1248,76 @@ test('new conversation renders bottom-right ring and inline tokens info on home 
   sandbox.globalThis = sandbox;
 
   try {
-    const res = vm.runInNewContext(
-      cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, ringMode: 'quota', hudFooterChip: true, hudTopBar: true }),
-      sandbox
-    );
-    assert.equal(res.status, 'ok');
+    // 1. Running plannerResponse before text -> thinking
+    vm.runInNewContext(cdp.buildInjectExpression({ ...cdp.DEFAULT_CONFIG, mascot: 'crab' }), sandbox);
     await new Promise((r) => setTimeout(r, 60));
 
-    // On .agy-home before sending, ring shows quota (42%) and inline stats + surround HUDs are mounted!
-    const statsBtn = footer.querySelector('.ag-cs-inline-stats');
-    const ringBtn = footer.querySelector('.ag-cs-context-ring');
-    const chip = footer.querySelector('.ag-cs-hud-footer-chip');
-    const topBar = card.querySelector('.ag-cs-hud-top-bar');
-    assert.ok(statsBtn, 'Expected inline tokens info on new conversation home view');
-    assert.ok(ringBtn, 'Expected bottom-right ring on new conversation home view');
-    assert.ok(chip, 'Expected optional footer chip when enabled on new conversation');
-    assert.ok(topBar, 'Expected optional top HUD bar when enabled on new conversation');
-    assert.equal(statsBtn.textContent, '0 轮 0 步 · 0 tok · 0% 缓存');
-    assert.equal(ringBtn.getAttribute('data-ring-mode'), 'quota');
-    assert.equal(ringBtn.querySelector('span')?.textContent, '42%');
+    const crabEl = card.querySelector('.ag-cs-crab');
+    assert.ok(crabEl, 'Expected Clawd pixel crab mounted on composer card');
+    assert.equal(crabEl.getAttribute('data-animation'), 'thinking');
+    assert.ok(trajCalls >= 1);
+    assert.equal(quotaCalls, 0);
+    assert.equal(footer.querySelector('.ag-cs-inline-stats'), null);
+    assert.equal(footer.querySelector('.ag-cs-context-ring'), null);
+    assert.equal(body.querySelector('.ag-cs-turn-bar'), null);
 
-    // Typing a draft in new conversation updates inline tokens estimate live
-    editorEl.textContent = '帮我修复新建对话下未显示圆环及tokens信息的问题';
-    for (const fn of [...(docListeners.get('input') || [])]) {
-      fn({ type: 'input', target: editorEl });
-    }
-    await new Promise((r) => setTimeout(r, 40));
-    assert.match(statsBtn.textContent, /^0 轮 0 步 · ~\d+ tok · 0% 缓存$/);
+    // Wait past MIN_SHOW_MS (1000ms) so happy attention moment can settle immediately on transition
+    await new Promise((r) => setTimeout(r, 1020));
 
-    // Part B: Transition into a newly started conversation while Turn 1 is still streaming (calls === 0)
-    home.remove();
-    currentCascadeId = '22222222-2222-4222-8222-222222222222';
-    const convView = makeEl('div', { attrs: { 'data-testid': 'conversation-view', 'data-cascade-id': currentCascadeId } });
-    editorEl.textContent = '';
-    currentTraj = {
-      trajectory: {
-        steps: [
-          { status: 3, step: { case: 'userInput', value: { query: 'Hello' } } },
-          { status: 1, metadata: { modelUsage: { outputTokens: '64' } }, step: { case: 'plannerResponse', value: { thinking: 'Thinking...' } } },
-        ],
-        generatorMetadata: [],
-      },
-    };
-    convView.appendChild(inputBox);
-    body.appendChild(convView);
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, ringMode: 'quota' });
-    await new Promise((r) => setTimeout(r, 60));
-
-    assert.ok(footer.querySelector('.ag-cs-inline-stats'), 'Expected inline stats during Turn 1 before generatorMetadata');
-    assert.ok(footer.querySelector('.ag-cs-context-ring'), 'Expected ring during Turn 1 before generatorMetadata');
-    assert.equal(footer.querySelector('.ag-cs-inline-stats')?.textContent, '0 轮 2 步 · ~64 tok · 0% 缓存');
-    assert.equal(footer.querySelector('.ag-cs-context-ring span')?.textContent, '42%');
-
-    // Part C: Once Turn 1 completes its first LLM call, stats & ring update in-place and click opens latest data
+    // 2. Conversation finishes cleanly -> happy attention moment
     currentStatus = 1;
+    stepCount = 2;
     currentTraj = {
       trajectory: {
         steps: [
-          { status: 3, step: { case: 'userInput', value: { query: 'Hello' } } },
-          { status: 3, step: { case: 'plannerResponse', value: { response: 'Hi' } } },
-        ],
-        generatorMetadata: [
-          {
-            stepIndices: [0, 1],
-            metadata: {
-              value: {
-                modelDisplayName: 'Gemini 4 Hydrogen (XHigh)',
-                usage: { inputTokens: '1000', cacheReadTokens: '9000', outputTokens: '300' },
-                chatStartMetadata: { contextWindowMetadata: { estimatedTokensUsed: 20000, maxContextTokens: 734000 } },
-              },
-            },
-          },
+          { status: 3, step: { case: 'userInput' } },
+          { status: 3, step: { case: 'plannerResponse', value: { response: 'Done' } } },
         ],
       },
     };
     doc.hidden = true;
-    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, ringMode: 'quota' });
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, mascot: 'crab' });
+    await new Promise((r) => setTimeout(r, 60));
+    doc.hidden = false;
+    assert.equal(crabEl.getAttribute('data-animation'), 'happy');
+    assert.equal(quotaCalls, 0);
+
+    // 3. New running turn ends with tool error -> error animation preempts immediately
+    currentStatus = 2;
+    stepCount = 3;
+    currentTraj = {
+      trajectory: {
+        steps: [
+          { status: 3, step: { case: 'userInput' } },
+          { status: 2, step: { case: 'plannerResponse', value: { response: 'Running...' } } },
+        ],
+      },
+    };
+    doc.hidden = true;
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, mascot: 'crab' });
     await new Promise((r) => setTimeout(r, 60));
     doc.hidden = false;
 
-    assert.equal(footer.querySelector('.ag-cs-inline-stats')?.textContent, '1 轮 2 步 · 10.3k tok · 90% 缓存');
-    footer.querySelector('.ag-cs-inline-stats')?.dispatch('click');
-    const pop = body.querySelector('.ag-cs-ctx-popover');
-    assert.ok(pop);
-    assert.ok(pop.innerHTML.includes('734.0K'), `Expected updated 734.0K context window in popover, got ${pop.innerHTML}`);
+    currentStatus = 1;
+    stepCount = 4;
+    currentTraj = {
+      trajectory: {
+        steps: [
+          { status: 3, step: { case: 'userInput' } },
+          { status: 4, step: { case: 'runCommand' } },
+          { status: 3, step: { case: 'plannerResponse', value: { response: 'Failed' } } },
+        ],
+      },
+    };
+    doc.hidden = true;
+    sandbox.window.__agClaudeStyle.refreshConfig({ ...cdp.DEFAULT_CONFIG, mascot: 'crab' });
+    await new Promise((r) => setTimeout(r, 60));
+    doc.hidden = false;
+    assert.equal(crabEl.getAttribute('data-animation'), 'error');
+    assert.equal(quotaCalls, 0);
 
     vm.runInNewContext(cdp.REMOVE_EXPRESSION, sandbox);
-    assert.equal(footer.querySelector('.ag-cs-inline-stats'), null);
-    assert.equal(footer.querySelector('.ag-cs-context-ring'), null);
+    assert.equal(card.querySelector('.ag-cs-crab'), null);
   } finally {
     for (const id of timers) clearTimeout(id);
   }

@@ -177,9 +177,57 @@
     return sec > 0 ? sec * 1000 + Math.floor(nanos / 1e6) : 0;
   }
 
+  function formatSlugTier(t) {
+    const low = String(t || '').toLowerCase();
+    if (!low) return '';
+    if (low === 'xhigh') return 'XHigh';
+    return low.charAt(0).toUpperCase() + low.slice(1);
+  }
+
+  function titleCaseSlugWord(w) {
+    const s = String(w || '').trim();
+    if (!s) return '';
+    return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  }
+
+  function normalizeModelDisplayName(rawName) {
+    const s = String(rawName || '').trim();
+    if (!s) return 'unknown';
+
+    const ph = s.match(/^(?:Model\s+#)?MODEL_PLACEHOLDER_M(\d+)$/i);
+    if (ph) return 'Model #M' + ph[1];
+
+    const orch = s.match(/^gemini-pro-orchestrator(?:-([a-z0-9]+))?$/i);
+    if (orch) return 'Orchestrator (' + titleCaseSlugWord(orch[1] || 'carbon') + ')';
+
+    const gem = s.match(
+      /^gemini-([0-9]+(?:\.[0-9]+)?)-([a-z]+)(?:-(low|medium|high|xhigh|max|extra))?(?:-(?:trial|tiered|n|preview|exp|experimental|internal|prod|v\d+))*$/i
+    );
+    if (gem) {
+      return 'Gemini ' + gem[1] + ' ' + titleCaseSlugWord(gem[2]) + (gem[3] ? ' (' + formatSlugTier(gem[3]) + ')' : '');
+    }
+
+    const claude = s.match(/^claude-(opus|sonnet|haiku)-(\d+)[-.](\d+)(?:-(low|medium|high|xhigh|max|thinking))?$/i);
+    if (claude) {
+      return 'Claude ' + titleCaseSlugWord(claude[1]) + ' ' + claude[2] + '.' + claude[3] + (claude[4] ? ' (' + formatSlugTier(claude[4]) + ')' : '');
+    }
+
+    const gpt = s.match(/^gpt-oss-(\d+[a-z]?)(?:-(low|medium|high))?$/i);
+    if (gpt) {
+      return 'GPT-OSS ' + gpt[1].toUpperCase() + (gpt[2] ? ' (' + formatSlugTier(gpt[2]) + ')' : '');
+    }
+
+    return s;
+  }
+
   function cleanModelName(val) {
-    const raw = String(val?.modelDisplayName || val?.responseModel || (val?.model ? 'Model #' + val.model : 'unknown')).trim();
-    return raw || 'unknown';
+    let rawFallback = 'unknown';
+    if (val?.model !== undefined && val?.model !== null && String(val.model).trim()) {
+      const mStr = String(val.model).trim();
+      rawFallback = typeof val.model === 'number' || /^\d+$/.test(mStr) ? 'Model #' + mStr : mStr;
+    }
+    const raw = String(val?.modelDisplayName || val?.responseModel || rawFallback).trim();
+    return normalizeModelDisplayName(raw);
   }
 
   function isSubagentSummary(summary) {
@@ -333,7 +381,8 @@
         if (day.models) {
           if (!allDayModels[dk]) allDayModels[dk] = {};
           for (const [mId, mData] of Object.entries(day.models)) {
-            allDayModels[dk][mId] = (allDayModels[dk][mId] || 0) + Number(mData.total || 0);
+            const normId = normalizeModelDisplayName(mId);
+            allDayModels[dk][normId] = (allDayModels[dk][normId] || 0) + Number(mData.total || 0);
           }
         }
 
@@ -354,10 +403,11 @@
         }
         if (day.models) {
           for (const [mId, mData] of Object.entries(day.models)) {
-            let entry = modelTotals[mId];
+            const normId = normalizeModelDisplayName(mId);
+            let entry = modelTotals[normId];
             if (!entry) {
               entry = {
-                id: mId,
+                id: normId,
                 input: 0,
                 output: 0,
                 cacheRead: 0,
@@ -366,7 +416,7 @@
                 calls: 0,
                 sessionsSet: new Set(),
               };
-              modelTotals[mId] = entry;
+              modelTotals[normId] = entry;
             }
             entry.input += Number(mData.input || 0);
             entry.output += Number(mData.output || 0);
@@ -509,369 +559,13 @@
     };
   }
 
-  function durSec(d) {
-    if (!d) return 0;
-    return Number(d.seconds || 0) + Number(d.nanos || 0) / 1e9;
-  }
-
-  function tsSec(ts) {
-    if (!ts) return 0;
-    return Number(ts.seconds || 0) + Number(ts.nanos || 0) / 1e9;
-  }
-
-  function fmtK(n) {
-    const v = Number(n) || 0;
-    if (v >= 1000000) return (v / 1000000).toFixed(2) + 'M';
-    if (v >= 1000) return (v / 1000).toFixed(1) + 'K';
-    return String(Math.round(v));
-  }
-
-  function fmtInt(n) {
-    return (Number(n) || 0).toLocaleString();
-  }
-
-  function fmtPct(p, digits = 1) {
-    const v = Number(p) || 0;
-    return v.toFixed(digits) + '%';
-  }
-
-  function fmtSec(s) {
-    const v = Number(s) || 0;
-    if (v <= 0) return '—';
-    if (v < 1) return Math.round(v * 1000) + 'ms';
-    return v.toFixed(1) + 's';
-  }
-
-  function fmtResetTime(tsSeconds, langOrZh, nowSec) {
-    const now = typeof nowSec === 'number' ? nowSec : Date.now() / 1000;
-    const sec = Number(tsSeconds || 0) - now;
-    const l = resolveLang(langOrZh);
-    if (sec <= 0) {
-      return pickByLang({ 'zh-CN': '即将刷新', 'zh-TW': '即將重設', yue: '就嚟重設', en: 'Refreshing', ja: '間もなく更新' }, l);
-    }
-    const d = Math.floor(sec / 86400);
-    const h = Math.floor((sec % 86400) / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    if (l === 'zh-CN') return d > 0 ? `${d}天${h}小时` : h > 0 ? `${h}小时${m}分` : `${Math.max(1, m)}分钟`;
-    if (l === 'zh-TW') return d > 0 ? `${d}天${h}小時` : h > 0 ? `${h}小時${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'yue') return d > 0 ? `${d}日${h}個鐘` : h > 0 ? `${h}個鐘${m}分` : `${Math.max(1, m)}分鐘`;
-    if (l === 'ja') return d > 0 ? `${d}日${h}時間` : h > 0 ? `${h}時間${m}分` : `${Math.max(1, m)}分`;
-    if (d > 0) return `${d}d ${h}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${Math.max(1, m)}m`;
-  }
-
-  // Estimate tokens for live draft text in the input box
-  function estimateTextTokens(text) {
-    if (!text) return { tokens: 0, chars: 0, cjk: 0 };
-    const clean = String(text);
-    const chars = [...clean].length;
-    if (!chars) return { tokens: 0, chars: 0, cjk: 0 };
-    const cjkMatches = clean.match(/[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff00-\uffef]/g);
-    const cjk = cjkMatches ? cjkMatches.length : 0;
-    const rest = Math.max(0, clean.length - cjk);
-    // Gemini / Claude tokenizer empirical ratio: ~0.68 tok/CJK char, ~0.27 tok/ASCII char
-    const tokens = Math.max(1, Math.round(cjk * 0.68 + rest * 0.27));
-    return { tokens, chars, cjk };
-  }
-
-  function hasUsageTokens(obj) {
-    return Boolean(
-      obj &&
-        (Number(obj.inputTokens || 0) > 0 ||
-          Number(obj.outputTokens || 0) > 0 ||
-          Number(obj.cacheReadTokens || 0) > 0 ||
-          Number(obj.cacheWriteTokens || 0) > 0)
-    );
-  }
-
-  // Extract live active-conversation metrics, per-call telemetry, breakdown trees,
-  // streaming speeds, and budgets for the composer footer, turn badges, and inspector popover.
-  function analyzeActiveConversation(trajObj, opts = {}) {
-    const t = trajObj?.response?.trajectory || trajObj?.trajectory || trajObj || {};
-    const gmList = Array.isArray(t.generatorMetadata) ? t.generatorMetadata : [];
-    const steps = Array.isArray(t.steps) ? t.steps : [];
-    const execList = Array.isArray(t.executorMetadatas) ? t.executorMetadatas : [];
-    const known = opts.knownLimits || {};
-    const cascadeId = String(opts.cascadeId || t.cascadeId || '');
-
-    // Build step index lookup for tool names & step cases
-    const stepInfoMap = new Map();
-    for (let idx = 0; idx < steps.length; idx++) {
-      const st = steps[idx];
-      if (!st) continue;
-      const stepCase = st.step?.case || 'unknown';
-      const val = st.step?.value || {};
-      const uri =
-        val.absolutePathUri ||
-        val.actionSpec?.createFile?.path?.absoluteUri ||
-        val.actionSpec?.editFile?.path?.absoluteUri ||
-        '';
-      const baseName = uri ? decodeURIComponent(uri).replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
-      let toolName = st.metadata?.toolCall?.name || val.toolCalls?.[0]?.name || '';
-      if (!toolName) {
-        if (stepCase === 'viewFile') toolName = baseName ? `read_file: ${baseName}` : 'read_file';
-        else if (stepCase === 'codeAction') toolName = baseName ? `edit_file: ${baseName}` : 'edit_file';
-        else if (stepCase === 'runCommand') toolName = 'run_command';
-        else if (stepCase === 'commandStatus') toolName = 'command_status';
-        else if (stepCase === 'listDir') toolName = 'list_dir';
-        else if (stepCase === 'grep') toolName = 'grep_search';
-        else if (stepCase === 'find') toolName = 'find_by_name';
-        else if (stepCase === 'searchWeb') toolName = 'search_web';
-      } else if (baseName && !toolName.includes(':')) {
-        toolName = `${toolName}: ${baseName}`;
-      }
-      stepInfoMap.set(idx, {
-        idx,
-        stepCase,
-        toolName,
-        toolSummary: st.metadata?.toolSummary || '',
-        status: st.status,
-      });
-    }
-
-    const callList = [];
-    let sumInput = 0;
-    let sumCacheRead = 0;
-    let sumCacheWrite = 0;
-    let sumOutput = 0;
-    let sumThinking = 0;
-    let sumResponse = 0;
-    let ttftSum = 0;
-    let ttftCount = 0;
-    let timedOutputSum = 0;
-    let timedStreamSum = 0;
-    let latestValidSpeed = 0;
-    let peakSpeed = 0;
-    let sustainedPeakSpeed = 0;
-    let latestCw = null;
-    let latestChatStart = null;
-    let latestBreakdown = null;
-    let latestBudgets = null;
-    let lastSpeed = 0;
-    let lastTtft = 0;
-
-    for (let i = 0; i < gmList.length; i++) {
-      const val = gmList[i]?.metadata?.value;
-      if (!val) continue;
-      const lastRetry =
-        Array.isArray(val.retryInfos) && val.retryInfos.length
-          ? val.retryInfos[val.retryInfos.length - 1]
-          : null;
-      const u = hasUsageTokens(val.usage) ? val.usage : lastRetry?.usage || val.usage || {};
-      const inp = Number(u.inputTokens || 0);
-      const cr = Number(u.cacheReadTokens || 0);
-      const cw = Number(u.cacheWriteTokens || 0);
-      const out = Number(u.outputTokens || 0);
-      const think = Number(u.thinkingOutputTokens || 0);
-      const resp = Number(u.responseOutputTokens || Math.max(0, out - think) || 0);
-
-      sumInput += inp;
-      sumCacheRead += cr;
-      sumCacheWrite += cw;
-      sumOutput += out;
-      sumThinking += think;
-      sumResponse += resp;
-
-      const cs = val.chatStartMetadata;
-      const cwMeta = cs?.contextWindowMetadata;
-      if (cs) latestChatStart = cs;
-      if (cwMeta && (cwMeta.estimatedTokensUsed || cwMeta.maxContextTokens)) {
-        latestCw = cwMeta;
-      }
-      if (cwMeta?.tokenBreakdown?.groups?.length) {
-        latestBreakdown = cwMeta.tokenBreakdown;
-      }
-      if (val.customizationTokenBudget || val.rulesTokenBudget) {
-        latestBudgets = {
-          customizationTokenBudget: Number(val.customizationTokenBudget || 0),
-          rulesTokenBudget: Number(val.rulesTokenBudget || 0),
-        };
-      }
-
-      const stream = durSec(val.streamingDuration) || durSec(lastRetry?.streamingDuration);
-      const ttft = durSec(val.timeToFirstToken) || durSec(lastRetry?.timeToFirstToken);
-      if (ttft > 0) {
-        lastTtft = ttft;
-        ttftSum += ttft;
-        ttftCount++;
-      }
-      const speed = stream > 0.05 && out > 0 ? Math.round(out / stream) : 0;
-      if (speed > 0) {
-        lastSpeed = speed;
-        latestValidSpeed = speed;
-        timedOutputSum += out;
-        timedStreamSum += stream;
-        if (speed > peakSpeed) peakSpeed = speed;
-        if (stream >= 0.5 && speed > sustainedPeakSpeed) sustainedPeakSpeed = speed;
-      }
-
-      const promptTotal = inp + cr;
-      const callCacheHitPct = promptTotal > 0 ? (cr / promptTotal) * 100 : 0;
-      const stepIndices = Array.isArray(gmList[i].stepIndices) ? gmList[i].stepIndices : [];
-      callList.push({
-        callNumber: callList.length + 1,
-        stepIndices,
-        stepRange: stepIndices.length
-          ? stepIndices.length === 1
-            ? `#${stepIndices[0]}`
-            : `#${stepIndices[0]}–${stepIndices[stepIndices.length - 1]}`
-          : '—',
-        modelDisplayName: cleanModelName(val),
-        responseModel: val.responseModel || '',
-        modelId: Number(val.model || 0),
-        contextUsed: Number(cwMeta?.estimatedTokensUsed || 0),
-        contextMax: Number(cwMeta?.maxContextTokens || 0),
-        inputTokens: inp,
-        cacheReadTokens: cr,
-        cacheWriteTokens: cw,
-        cacheHitPct: callCacheHitPct,
-        outputTokens: out,
-        thinkingTokens: think,
-        responseTokens: resp,
-        ttft,
-        stream,
-        speed,
-        retries: Number(val.retries || 0),
-      });
-    }
-
-    for (let i = execList.length - 1; i >= 0; i--) {
-      const ev = execList[i]?.metadata?.value || execList[i] || {};
-      if (!latestBudgets && (ev.customizationTokenBudget || ev.rulesTokenBudget)) {
-        latestBudgets = {
-          customizationTokenBudget: Number(ev.customizationTokenBudget || 0),
-          rulesTokenBudget: Number(ev.rulesTokenBudget || 0),
-        };
-      }
-    }
-
-    const maxContextTokens =
-      Number(latestCw?.maxContextTokens || 0) ||
-      Number(known.maxContextTokens || 0) ||
-      256000;
-    const contextUsed = Number(latestCw?.estimatedTokensUsed || 0);
-    const contextRemaining = Math.max(0, maxContextTokens - contextUsed);
-    const contextPct = maxContextTokens > 0 ? Math.min(100, (contextUsed / maxContextTokens) * 100) : 0;
-    const contextRemainingPct =
-      maxContextTokens > 0 ? Math.max(0, Math.min(100, (contextRemaining / maxContextTokens) * 100)) : 100;
-
-    let sysTokens = 0;
-    let toolsTokens = 0;
-    let msgTokens = 0;
-    let sysChildren = [];
-    let toolsChildren = [];
-    let msgChildren = [];
-    let userMsgTokens = 0;
-    let botMsgTokens = 0;
-    let toolIoTokens = 0;
-
-    if (latestBreakdown && Array.isArray(latestBreakdown.groups)) {
-      for (const grp of latestBreakdown.groups) {
-        const gName = String(grp.name || '');
-        const gTokens = Number(grp.numTokens || 0);
-        const children = (grp.children || []).map((c) => ({
-          name: String(c.name || ''),
-          tokens: Number(c.numTokens || 0),
-        }));
-        if (grp.type === 1 || /system/i.test(gName)) {
-          sysTokens = gTokens;
-          sysChildren = children.sort((a, b) => b.tokens - a.tokens);
-        } else if (grp.type === 2 || /tool/i.test(gName)) {
-          toolsTokens = gTokens;
-          toolsChildren = children.sort((a, b) => b.tokens - a.tokens);
-        } else if (grp.type === 7 || /message|chat/i.test(gName)) {
-          msgTokens = gTokens;
-          msgChildren = children.map((c) => {
-            const m = /^(\d+):\s*(\S+)/.exec(c.name);
-            const sIdx = m ? parseInt(m[1], 10) : -1;
-            const kind = m ? m[2] : c.name;
-            const sInfo = sIdx >= 0 ? stepInfoMap.get(sIdx) : null;
-            if (kind === 'USER_INPUT') userMsgTokens += c.tokens;
-            else if (kind === 'PLANNER_RESPONSE') botMsgTokens += c.tokens;
-            else toolIoTokens += c.tokens;
-            const label =
-              sInfo && sInfo.toolName
-                ? kind === 'GENERIC'
-                  ? `#${sIdx} ${sInfo.toolName}`
-                  : `#${sIdx} ${kind} (${sInfo.toolName})`
-                : sIdx >= 0
-                ? `#${sIdx} ${kind}`
-                : c.name;
-            return {
-              ...c,
-              stepIdx: sIdx,
-              kind,
-              toolName: sInfo?.toolName || '',
-              label,
-            };
-          });
-        }
-      }
-    }
-
-    if (!sysTokens && known.sysTokens && contextUsed === 0) {
-      sysTokens = Number(known.sysTokens) || 0;
-    }
-    if (!toolsTokens && known.toolsTokens && contextUsed === 0) {
-      toolsTokens = Number(known.toolsTokens) || 0;
-    }
-    if (contextUsed > 0 && sysTokens === 0 && toolsTokens === 0 && msgTokens === 0) {
-      msgTokens = contextUsed;
-    }
-
-    const lastCall = callList.length ? callList[callList.length - 1] : null;
-    const totalPrompt = sumInput + sumCacheRead;
-    const cacheHitPct = totalPrompt > 0 ? (sumCacheRead / totalPrompt) * 100 : 0;
-    const overallThinkPct = sumOutput > 0 ? (sumThinking / sumOutput) * 100 : 0;
-    const totalTokens = sumInput + sumCacheRead + sumCacheWrite + sumOutput;
-    const avgTtft = ttftCount > 0 ? ttftSum / ttftCount : 0;
-    const avgSpeed = timedStreamSum > 0.05 && timedOutputSum > 0 ? Math.round(timedOutputSum / timedStreamSum) : 0;
-    if (!sustainedPeakSpeed) sustainedPeakSpeed = peakSpeed;
-
-    // Live streaming speed & token estimate when the latest plannerResponse step is currently generating
-    let liveSpeed = 0;
-    let liveTokens = 0;
-    const nowSec = typeof opts.nowSec === 'number' ? opts.nowSec : Date.now() / 1000;
-    for (let i = steps.length - 1; i >= 0; i--) {
-      const st = steps[i];
-      if (!st) continue;
-      if (st.status !== 1 && st.status !== 2) continue;
-      if (st.step?.case !== 'plannerResponse') break;
-      const hasLaterStep = i < steps.length - 1 && steps.slice(i + 1).some((s) => s && s.step?.case);
-      if (hasLaterStep) break;
-      const pv = st.step?.value || {};
-      const tcText = Array.isArray(pv.toolCalls)
-        ? pv.toolCalls.map((tc) => `${tc.name || ''}${tc.argumentsJson || ''}`).join('')
-        : '';
-      const liveText = `${pv.thinking || ''}${pv.response || ''}${tcText}`;
-      const textTokens = liveText ? estimateTextTokens(liveText).tokens : 0;
-      const modelOutTokens = Number(st.metadata?.modelUsage?.outputTokens || 0);
-      liveTokens = Math.max(modelOutTokens, textTokens);
-      const viewableSec = tsSec(st.metadata?.viewableAt);
-      const finishedSec = tsSec(st.metadata?.finishedGeneratingAt);
-      if (viewableSec > 0 && finishedSec === 0) {
-        const elapsed = nowSec - viewableSec;
-        if (elapsed >= 0.35 && elapsed < 3600 && liveTokens >= 5) {
-          liveSpeed = Math.round(liveTokens / elapsed);
-        }
-      }
-      break;
-    }
-
-    const displaySpeed = liveSpeed > 0 ? liveSpeed : lastCall?.speed > 0 ? lastCall.speed : latestValidSpeed;
-    const isLiveSpeed = liveSpeed > 0;
-
-    const checkpointIdx = Number(latestChatStart?.checkpointIndex ?? -1);
-    const compactedSteps = Array.isArray(latestChatStart?.stepsCoveredByCheckpoint)
-      ? latestChatStart.stepsCoveredByCheckpoint.length
-      : 0;
-    const truncationReason = Number(latestCw?.truncationReason || 0);
-
-    // Detect active/running or error state for mascot & status
+  function inspectTrajectoryActivity(trajObj) {
+    const traj = trajObj?.trajectory || trajObj || null;
+    const steps = Array.isArray(traj?.steps) ? traj.steps : [];
     let isRunning = false;
     let isThinking = false;
     let hasError = false;
+    const errStart = Math.max(0, steps.length - 8);
     for (let i = 0; i < steps.length; i++) {
       const st = steps[i];
       if (!st) continue;
@@ -879,610 +573,11 @@
         isRunning = true;
         if (st.step?.case === 'plannerResponse' && !st.step?.value?.response) isThinking = true;
       }
-      if (i >= Math.max(0, steps.length - 8) && (st.status === 4 || st.status === 6)) {
+      if (i >= errStart && (st.status === 4 || st.status === 6)) {
         hasError = true;
       }
     }
-
-    // Build per-turn details (turnDetails) and tool leaderboard (toolBreakdown)
-    const userStepIndices = [];
-    for (let idx = 0; idx < steps.length; idx++) {
-      if (steps[idx]?.step?.case === 'userInput') userStepIndices.push(idx);
-    }
-
-    const turnDetails = [];
-    if (callList.length > 0) {
-      if (userStepIndices.length > 0 && callList.some((c) => c.stepIndices.length > 0)) {
-        const turnBuckets = userStepIndices.map((uIdx, tIdx) => ({
-          turn: tIdx + 1,
-          userStepIdx: uIdx,
-          nextUserStepIdx: tIdx + 1 < userStepIndices.length ? userStepIndices[tIdx + 1] : Infinity,
-          calls: [],
-        }));
-        for (const c of callList) {
-          const firstStep = c.stepIndices.length > 0 ? c.stepIndices[0] : -1;
-          let bucket = turnBuckets[turnBuckets.length - 1];
-          for (let b = turnBuckets.length - 1; b >= 0; b--) {
-            if (firstStep >= turnBuckets[b].userStepIdx) {
-              bucket = turnBuckets[b];
-              break;
-            }
-          }
-          bucket.calls.push(c);
-        }
-        let prevCtx = sysTokens + toolsTokens;
-        for (const b of turnBuckets) {
-          if (b.calls.length === 0) continue;
-          const lastC = b.calls[b.calls.length - 1];
-          const ctxU = lastC.contextUsed || prevCtx;
-          const ctxDelta = ctxU - prevCtx;
-          prevCtx = ctxU;
-          const outSum = b.calls.reduce((s, x) => s + (x.outputTokens || 0), 0);
-          const thinkSum = b.calls.reduce((s, x) => s + (x.thinkingTokens || 0), 0);
-          const uStepObj = steps[b.userStepIdx] || {};
-          const uStep = uStepObj.step?.value || {};
-          const rawPrompt = String(uStep.query || uStep.text || uStep.userInput || '').replace(/\s+/g, ' ').trim();
-          const startTimeSec = tsSec(uStepObj.metadata?.createdAt);
-          let turnToolCalls = 0;
-          const endIdx = Math.min(steps.length, b.nextUserStepIdx);
-          for (let sIdx = b.userStepIdx + 1; sIdx < endIdx; sIdx++) {
-            const sc = steps[sIdx]?.step?.case;
-            if (sc && sc !== 'userInput' && sc !== 'plannerResponse' && sc !== 'systemMessage' && sc !== 'checkpoint') {
-              turnToolCalls++;
-            }
-          }
-          turnDetails.push({
-            turn: turnDetails.length + 1,
-            userStepIdx: b.userStepIdx,
-            nextUserStepIdx: b.nextUserStepIdx,
-            startTimeSec,
-            model: lastC.modelDisplayName || '',
-            calls: b.calls.length,
-            toolCalls: turnToolCalls,
-            ctxUsed: ctxU,
-            ctxDelta,
-            output: outSum,
-            thinking: thinkSum,
-            speed: lastC.speed || 0,
-            ttft: lastC.ttft || 0,
-            cacheHitPct: Math.round(lastC.cacheHitPct || 0),
-            userPreview: rawPrompt ? rawPrompt.slice(0, 80) : '',
-            subagentCount: 0,
-            subagentCalls: 0,
-            subagentTokens: 0,
-          });
-        }
-      } else {
-        let prevCtx = sysTokens + toolsTokens;
-        for (let i = 0; i < callList.length; i++) {
-          const c = callList[i];
-          const ctxU = c.contextUsed || prevCtx;
-          const ctxDelta = ctxU - prevCtx;
-          prevCtx = ctxU;
-          const firstIdx = c.stepIndices?.[0] ?? -1;
-          const startTimeSec = firstIdx >= 0 ? tsSec(steps[firstIdx]?.metadata?.createdAt) : 0;
-          turnDetails.push({
-            turn: i + 1,
-            userStepIdx: firstIdx,
-            nextUserStepIdx: Infinity,
-            startTimeSec,
-            model: c.modelDisplayName || '',
-            calls: 1,
-            toolCalls: 0,
-            ctxUsed: ctxU,
-            ctxDelta,
-            output: c.outputTokens || 0,
-            thinking: c.thinkingTokens || 0,
-            speed: c.speed || 0,
-            ttft: c.ttft || 0,
-            cacheHitPct: Math.round(c.cacheHitPct || 0),
-            userPreview: '',
-            subagentCount: 0,
-            subagentCalls: 0,
-            subagentTokens: 0,
-          });
-        }
-      }
-    }
-
-    const toolMap = new Map();
-    for (const mc of msgChildren) {
-      if (mc.kind === 'USER_INPUT' || mc.kind === 'PLANNER_RESPONSE') continue;
-      const rawTool = mc.toolName ? mc.toolName.split(':')[0].trim() : mc.kind || 'tool';
-      const entry = toolMap.get(rawTool) || { name: rawTool, count: 0, tokens: 0 };
-      entry.count += 1;
-      entry.tokens += Number(mc.tokens || 0);
-      toolMap.set(rawTool, entry);
-    }
-    if (toolMap.size === 0 && stepInfoMap.size > 0) {
-      for (const [, sInfo] of stepInfoMap.entries()) {
-        if (!sInfo.toolName) continue;
-        const rawTool = sInfo.toolName.split(':')[0].trim();
-        const entry = toolMap.get(rawTool) || { name: rawTool, count: 0, tokens: 0 };
-        entry.count += 1;
-        toolMap.set(rawTool, entry);
-      }
-    }
-    const toolBreakdown = Array.from(toolMap.values()).sort((a, b) => b.tokens - a.tokens || b.count - a.count);
-
-    const clampedToolResults = msgTokens > 0 ? Math.min(msgTokens, toolIoTokens) : toolIoTokens;
-    const chatMsgTokens = msgTokens > 0 ? Math.max(0, msgTokens - clampedToolResults) : userMsgTokens + botMsgTokens;
-
-    const result = {
-      cascadeId,
-      turns: turnDetails.length || callList.length,
-      turnDetails,
-      toolBreakdown,
-      chatMsgTokens,
-      toolResultsTokens: clampedToolResults,
-      overheadTokens: Math.max(0, contextUsed - (sysTokens + toolsTokens + msgTokens)),
-      lastModel: lastCall?.modelDisplayName || '',
-      lastFreshInput: lastCall?.inputTokens || 0,
-      lastCacheRead: lastCall?.cacheReadTokens || 0,
-      lastOutput: lastCall?.outputTokens || 0,
-      lastThinking: lastCall?.thinkingTokens || 0,
-      totalOutput: sumOutput,
-      subagents: [],
-      subagentCount: 0,
-      subagentCalls: 0,
-      subagentTokens: 0,
-      calls: gmList.length,
-      totalCalls: callList.length,
-      callList,
-      lastCall,
-      hasCalls: callList.length > 0,
-      steps: steps.length,
-      totalSteps: steps.length,
-      contextUsed,
-      contextRemaining,
-      maxContextTokens,
-      contextPct,
-      contextRemainingPct,
-      sysTokens,
-      toolsTokens,
-      msgTokens,
-      sysChildren,
-      toolsChildren,
-      msgChildren,
-      topSteps: [...msgChildren].sort((a, b) => b.tokens - a.tokens).slice(0, 10),
-      userMsgTokens,
-      botMsgTokens,
-      toolIoTokens,
-      sumInput,
-      sumCacheRead,
-      sumCacheWrite,
-      sumOutput,
-      sumThinking,
-      sumResponse,
-      totalTokens,
-      sumAllTokens: totalTokens,
-      cacheHitPct,
-      overallCacheHitPct: cacheHitPct,
-      overallThinkPct,
-      lastSpeed,
-      lastTtft,
-      avgTtft,
-      avgSpeed,
-      latestValidSpeed,
-      liveSpeed,
-      liveTokens,
-      displaySpeed,
-      isLiveSpeed,
-      peakSpeed,
-      sustainedPeakSpeed,
-      checkpointIdx,
-      compactedSteps,
-      truncationReason,
-      budgets: latestBudgets || {
-        customizationTokenBudget: known.customizationTokenBudget || 20000,
-        rulesTokenBudget: known.rulesTokenBudget || 20000,
-      },
-      hasActiveLimits: Boolean(latestCw?.maxContextTokens && sysTokens > 0),
-      isRunning,
-      isThinking,
-      hasError,
-    };
-
-    if (Array.isArray(opts.subagents) && opts.subagents.length > 0) {
-      attachSubagentSummaries(result, opts.subagents);
-    }
-
-    return result;
-  }
-
-  function attachSubagentSummaries(convoData, subagentItems) {
-    if (!convoData || !Array.isArray(subagentItems)) return convoData;
-    const normalized = [];
-    for (const raw of subagentItems) {
-      if (!raw) continue;
-      const id = String(raw.id || raw.cascadeId || '');
-      const analysis = raw.analysis || (raw.trajectory ? analyzeActiveConversation(raw.trajectory, { cascadeId: id }) : null);
-      const createdAtSec = Number(raw.createdAtSec || tsSec(raw.createdAt || raw.createdTime) || 0);
-      const status = Number(raw.status ?? (analysis?.isRunning ? 2 : 1));
-      const calls = Number(raw.calls ?? analysis?.totalCalls ?? 0);
-      const totalTokens = Number(raw.totalTokens ?? analysis?.totalTokens ?? 0);
-      const outputTokens = Number(raw.outputTokens ?? analysis?.totalOutput ?? 0);
-      const contextUsed = Number(raw.contextUsed ?? analysis?.contextUsed ?? 0);
-      const steps = Number(raw.steps ?? analysis?.totalSteps ?? raw.stepCount ?? 0);
-      const model = String(raw.model || analysis?.lastModel || '');
-      const speed = Number(raw.speed ?? analysis?.displaySpeed ?? analysis?.avgSpeed ?? 0);
-      const toolCount = Number(
-        raw.toolCount ?? (analysis?.toolBreakdown || []).reduce((acc, t) => acc + (t.count || 0), 0)
-      );
-      normalized.push({
-        id,
-        shortId: id ? id.slice(0, 8) : 'subagent',
-        parentId: String(raw.parentId || ''),
-        rootId: String(raw.rootId || ''),
-        summary: String(raw.summary || ''),
-        status,
-        isRunning: status === 2 || Boolean(analysis?.isRunning),
-        steps,
-        calls,
-        model,
-        totalTokens,
-        outputTokens,
-        contextUsed,
-        speed,
-        toolCount,
-        createdAtSec,
-      });
-    }
-    normalized.sort((a, b) => (a.createdAtSec || 0) - (b.createdAtSec || 0));
-
-    convoData.subagents = normalized;
-    convoData.subagentCount = normalized.length;
-    convoData.subagentCalls = normalized.reduce((s, x) => s + (x.calls || 0), 0);
-    convoData.subagentTokens = normalized.reduce((s, x) => s + (x.totalTokens || 0), 0);
-
-    if (Array.isArray(convoData.turnDetails) && convoData.turnDetails.length > 0) {
-      for (const td of convoData.turnDetails) {
-        td.subagentCount = 0;
-        td.subagentCalls = 0;
-        td.subagentTokens = 0;
-      }
-      for (const sub of normalized) {
-        let targetTurn = convoData.turnDetails[convoData.turnDetails.length - 1];
-        if (sub.createdAtSec > 0) {
-          for (let i = convoData.turnDetails.length - 1; i >= 0; i--) {
-            const td = convoData.turnDetails[i];
-            if (td.startTimeSec > 0 && sub.createdAtSec >= td.startTimeSec - 2) {
-              targetTurn = td;
-              break;
-            }
-          }
-        }
-        if (targetTurn) {
-          targetTurn.subagentCount = (targetTurn.subagentCount || 0) + 1;
-          targetTurn.subagentCalls = (targetTurn.subagentCalls || 0) + (sub.calls || 1);
-          targetTurn.subagentTokens = (targetTurn.subagentTokens || 0) + (sub.totalTokens || 0);
-        }
-      }
-    }
-    return convoData;
-  }
-
-  function normalizeQuotaData(quotaRes, userStatusOrState, storeCredits, langOrZh) {
-    const lang = langOrZh === undefined ? 'zh-CN' : resolveLang(langOrZh);
-    const userStatus = userStatusOrState?.userStatus ? userStatusOrState.userStatus : userStatusOrState;
-    const rawGroups = quotaRes?.response?.groups || quotaRes?.groups || [];
-    const groups = rawGroups.map((g) => {
-      const name = String(g.displayName || g.name || '');
-      const buckets = (g.buckets || []).map((b) => {
-        const resetSeconds = Number(b.resetTime?.seconds || 0);
-        return {
-          id: String(b.bucketId || ''),
-          name: String(b.displayName || ''),
-          window: String(b.window || ''),
-          disabled: Boolean(b.disabled),
-          remainingPct:
-            b.remaining?.case === 'remainingFraction'
-              ? Math.max(0, Math.min(100, Number(b.remaining.value || 0) * 100))
-              : typeof b.remainingPct === 'number'
-              ? b.remainingPct
-              : null,
-          resetSeconds,
-          resetIn: resetSeconds > 0 ? fmtResetTime(resetSeconds, lang) : '',
-          desc: String(b.description || ''),
-        };
-      });
-      const b5h = buckets.find((b) => b.window === '5h') || null;
-      const bWeek = buckets.find((b) => b.window === 'weekly') || buckets[0] || null;
-      const enabledPcts = buckets.filter((b) => !b.disabled && typeof b.remainingPct === 'number').map((b) => b.remainingPct);
-      const anyPcts = buckets.filter((b) => typeof b.remainingPct === 'number').map((b) => b.remainingPct);
-      const effectiveRemainingPct = enabledPcts.length
-        ? Math.min(...enabledPcts)
-        : anyPcts.length
-        ? Math.min(...anyPcts)
-        : 0;
-      return {
-        name,
-        groupName: name,
-        desc: String(g.description || ''),
-        buckets,
-        b5h,
-        bWeek,
-        effectiveRemainingPct,
-      };
-    });
-
-    const modelConfigs = (userStatus?.cascadeModelConfigData?.clientModelConfigs || []).map((m) => ({
-      label: String(m.label || ''),
-      modelIdStr: String(m.modelId || ''),
-      modelNum: Number(m.modelOrAlias?.choice?.value || 0),
-      disabled: Boolean(m.disabled),
-      remainingPct:
-        m.quotaInfo && typeof m.quotaInfo.remainingFraction === 'number'
-          ? Math.max(0, Math.min(100, Number(m.quotaInfo.remainingFraction) * 100))
-          : null,
-      resetSeconds: Number(m.quotaInfo?.resetTime?.seconds || 0),
-    }));
-
-    if (groups.length === 0 && modelConfigs.length > 0) {
-      const seenFamilies = new Map();
-      for (const mc of modelConfigs) {
-        if (mc.disabled || typeof mc.remainingPct !== 'number') continue;
-        const family = mc.label.replace(/\s*\((?:Low|Medium|High|XHigh|Max)\)\s*$/i, '').trim() || mc.label;
-        if (!seenFamilies.has(family)) {
-          const bWeek = {
-            id: mc.modelIdStr || 'model',
-            name: family,
-            window: 'weekly',
-            disabled: false,
-            remainingPct: mc.remainingPct,
-            resetSeconds: mc.resetSeconds,
-            resetIn: mc.resetSeconds > 0 ? fmtResetTime(mc.resetSeconds, lang) : '',
-            desc: '',
-          };
-          seenFamilies.set(family, {
-            name: family,
-            groupName: family,
-            desc: '',
-            buckets: [bWeek],
-            b5h: null,
-            bWeek,
-            effectiveRemainingPct: mc.remainingPct,
-          });
-        }
-      }
-      groups.push(...seenFamilies.values());
-    }
-
-    const tier = userStatus?.userTier || {};
-    const planStatus = userStatus?.planStatus || {};
-    const planInfo = planStatus.planInfo || {};
-    const tierCredit = Array.isArray(tier.availableCredits) && tier.availableCredits[0] ? tier.availableCredits[0] : null;
-    const availableCredits = Number(
-      storeCredits?.availableCredits ?? tierCredit?.creditAmount ?? 0
-    );
-    const minimumCreditAmountForUsage = Number(
-      storeCredits?.minimumCreditAmountForUsage ?? tierCredit?.minimumCreditAmountForUsage ?? 50
-    );
-
-    return {
-      groups,
-      modelConfigs,
-      tierName: String(tier.name || planInfo.planName || ''),
-      planName: String(planInfo.planName || ''),
-      credits: {
-        useAICredits: Boolean(storeCredits?.useAICredits),
-        availableCredits,
-        minimumCreditAmountForUsage,
-        availablePromptCredits: Number(planStatus.availablePromptCredits || 0),
-        availableFlowCredits: Number(planStatus.availableFlowCredits || 0),
-        availableFlexCredits: Number(planStatus.availableFlexCredits || 0),
-        monthlyPromptCredits: Number(planInfo.monthlyPromptCredits || 0),
-        monthlyFlowCredits: Number(planInfo.monthlyFlowCredits || 0),
-      },
-    };
-  }
-
-  function getActiveQuotaInfo(quotaData, modelName, modelId) {
-    const groups = quotaData?.groups || [];
-    const modelConfigs = quotaData?.modelConfigs || [];
-    const lower = String(modelName || '').toLowerCase();
-
-    let matchedModel = null;
-    if (modelId) {
-      matchedModel = modelConfigs.find((m) => m.modelNum && m.modelNum === Number(modelId)) || null;
-    }
-    if (!matchedModel && lower) {
-      matchedModel =
-        modelConfigs.find((m) => m.label.toLowerCase() === lower) ||
-        modelConfigs.find((m) => lower.includes(m.label.toLowerCase().replace(/[()]/g, '').trim())) ||
-        null;
-    }
-
-    let preferred = null;
-    if (groups.length > 0) {
-      if (lower.includes('argon')) {
-        preferred = groups.find((g) => /argon/i.test(g.name));
-      } else if (/claude|gpt|sonnet|opus/i.test(lower)) {
-        preferred = groups.find((g) => /claude|gpt|sonnet|opus/i.test(g.name));
-      }
-      if (!preferred && lower) {
-        let bestLen = 0;
-        for (const g of groups) {
-          const gn = String(g.name || '').trim().toLowerCase();
-          if (gn && lower.includes(gn) && gn.length > bestLen) {
-            bestLen = gn.length;
-            preferred = g;
-          }
-        }
-      }
-      if (!preferred) {
-        preferred = groups.find((g) => /gemini/i.test(g.name) && !/argon/i.test(g.name)) || groups[0];
-      }
-    }
-
-    if (preferred && preferred.buckets.length > 0) {
-      const b5h = preferred.buckets.find((b) => b.window === '5h') || null;
-      const bWeek = preferred.buckets.find((b) => b.window === 'weekly') || preferred.buckets[0] || null;
-      const enabledPcts = preferred.buckets
-        .filter((b) => !b.disabled && typeof b.remainingPct === 'number')
-        .map((b) => b.remainingPct);
-      const anyPcts = preferred.buckets
-        .filter((b) => typeof b.remainingPct === 'number')
-        .map((b) => b.remainingPct);
-      const effectiveRemainingPct = enabledPcts.length
-        ? Math.min(...enabledPcts)
-        : anyPcts.length
-        ? Math.min(...anyPcts)
-        : matchedModel?.remainingPct ?? null;
-
-      return {
-        groupName: preferred.name,
-        b5h,
-        bWeek,
-        buckets: preferred.buckets,
-        effectiveRemainingPct,
-        modelQuotaPct: matchedModel?.remainingPct ?? null,
-      };
-    }
-
-    if (matchedModel && typeof matchedModel.remainingPct === 'number') {
-      return {
-        groupName: matchedModel.label,
-        b5h: null,
-        bWeek: {
-          id: matchedModel.modelIdStr || 'model',
-          name: matchedModel.label,
-          window: 'weekly',
-          disabled: matchedModel.disabled,
-          remainingPct: matchedModel.remainingPct,
-          resetSeconds: matchedModel.resetSeconds,
-        },
-        buckets: [],
-        effectiveRemainingPct: matchedModel.remainingPct,
-        modelQuotaPct: matchedModel.remainingPct,
-      };
-    }
-
-    return null;
-  }
-
-  // Compute remaining-usage telemetry for the bottom-right circular ring (.ag-cs-context-ring).
-  function computeRingTelemetry({
-    activeInfo = null,
-    quotaInfo = null,
-    draftTokens = 0,
-    ringMode = 'context',
-    knownLimits = null,
-  } = {}) {
-    const maxTokens =
-      Number(activeInfo?.maxContextTokens || 0) ||
-      Number(knownLimits?.maxContextTokens || 0) ||
-      256000;
-    const baseUsed = Number(activeInfo?.contextUsed || 0);
-    const draft = Math.max(0, Number(draftTokens) || 0);
-    const usedTokens = baseUsed + draft;
-    const remainingTokens = Math.max(0, maxTokens - usedTokens);
-    const contextUsedPct = maxTokens > 0 ? Math.max(0, Math.min(100, (usedTokens / maxTokens) * 100)) : 0;
-    const contextRemainingPct =
-      maxTokens > 0 ? Math.max(0, Math.min(100, (remainingTokens / maxTokens) * 100)) : 100;
-
-    const quotaRemainingPct =
-      quotaInfo && typeof quotaInfo.effectiveRemainingPct === 'number'
-        ? Math.max(0, Math.min(100, quotaInfo.effectiveRemainingPct))
-        : null;
-
-    let mode = ringMode === 'quota' ? 'quota' : 'context';
-    let pct = contextRemainingPct;
-    let level;
-    if (mode === 'quota' && quotaRemainingPct !== null) {
-      pct = quotaRemainingPct;
-      level = pct <= 10 ? 'danger' : pct <= 30 ? 'warn' : 'ok';
-    } else {
-      mode = 'context';
-      pct = contextRemainingPct;
-      level = pct <= 10 ? 'danger' : pct <= 30 ? 'warn' : 'ok';
-    }
-
-    const pctRound = Math.round(pct);
-    const color = level === 'danger' ? '#dc3c3d' : level === 'warn' ? '#fbb315' : '#257de0';
-
-    return {
-      mode,
-      pct,
-      remainingPct: pct,
-      pctRound,
-      level,
-      color,
-      usedTokens,
-      remainingTokens,
-      maxTokens,
-      draftTokens: draft,
-      contextUsedPct,
-      contextRemainingPct,
-      quotaRemainingPct,
-    };
-  }
-
-  function buildTelemetryReport(data, draftEst, quotaData, activeQuota, langOrZh) {
-    if (!data) return '{}';
-    const l = langOrZh === undefined ? 'en' : resolveLang(langOrZh);
-    const maxTok = data.maxContextTokens || 256000;
-    const remTok = Math.max(0, maxTok - (data.contextUsed || 0));
-    const remPct = maxTok > 0 ? (remTok / maxTok) * 100 : 100;
-    if (l === 'en') {
-      const speedLine =
-        data.displaySpeed || data.avgSpeed
-          ? `- Generation Speed: ${data.isLiveSpeed ? 'Live ~' : 'Latest '}${data.displaySpeed || 0} tok/s | Session Avg ${data.avgSpeed || 0} tok/s | Peak ${data.sustainedPeakSpeed || 0} tok/s | Avg TTFT ${fmtSec(data.avgTtft || 0)}`
-          : null;
-      const quotaLine =
-        activeQuota && activeQuota.effectiveRemainingPct != null
-          ? `- Model Quota (${activeQuota.groupName}): ${activeQuota.b5h && !activeQuota.b5h.disabled ? `5h ${fmtPct(activeQuota.b5h.remainingPct, 1)} | ` : ''}${activeQuota.bWeek ? `Weekly ${fmtPct(activeQuota.bWeek.remainingPct, 1)}` : `Remaining ${fmtPct(activeQuota.effectiveRemainingPct, 1)}`}`
-          : null;
-      const lines = [
-        `# AGY Claude Style Token HUD Report`,
-        `- Conversation ID: ${data.cascadeId || 'N/A'}`,
-        `- Model: ${data.lastCall?.modelDisplayName || 'N/A'}${data.lastCall?.responseModel ? ` (${data.lastCall.responseModel})` : ''}`,
-        `- Context Remaining: ${fmtInt(remTok)} / ${fmtInt(maxTok)} tokens (${fmtPct(remPct)} free, ${fmtPct(data.contextPct)} used)`,
-        `- Context Breakdown: System ${fmtInt(data.sysTokens)} | Tools ${fmtInt(data.toolsTokens)} (${(data.toolsChildren || []).length}) | Chat ${fmtInt(data.chatMsgTokens ?? data.msgTokens)} | Tool Results ${fmtInt(data.toolResultsTokens || 0)} (${data.totalSteps} steps)`,
-        `- Session Totals (${data.totalCalls} calls): Input ${fmtInt(data.sumInput)} | Cache Read ${fmtInt(data.sumCacheRead)} (${fmtPct(data.overallCacheHitPct)} hit) | Output ${fmtInt(data.sumOutput)} (Thinking ${fmtInt(data.sumThinking)}, Response ${fmtInt(data.sumResponse)})`,
-        ...(data.subagentCount > 0
-          ? [`- Subagents: ${data.subagentCount} spawned (${data.subagentCalls} calls, ${fmtInt(data.subagentTokens)} total tokens)`]
-          : []),
-        ...(speedLine ? [speedLine] : []),
-        ...(quotaLine ? [quotaLine] : []),
-        ...(quotaData?.tierName ? [`- Plan / Credits: ${quotaData.tierName} (AI Credits: ${fmtInt(quotaData.credits?.availableCredits || 0)})`] : []),
-        `- Live Draft: ~${fmtInt(draftEst?.tokens || 0)} tokens (${fmtInt(draftEst?.chars || 0)} chars)`,
-      ];
-      return lines.join('\n');
-    }
-    const labels = pickByLang(
-      {
-        'zh-CN': { title: '# AGY Claude Style Token 监控报告', cid: '对话 ID', model: '模型', rem: '上下文剩余', free: '可用', used: '已用', brk: '上下文构成', sys: '系统', tools: '工具', chat: '对话', tr: '工具结果', steps: '步', tot: '会话累计', calls: '次调用', inp: '输入', cr: '缓存读取', hit: '命中率', out: '输出', thk: '思考', rsp: '回复', sub: '子智能体', subSpawn: '个', spd: '生成速度', live: '实时 ~', latest: '最新 ', avg: '均值', peak: '峰值', ttft: '首字均值 TTFT', quota: '模型配额', q5h: '5小时', qwk: '本周', qrem: '剩余', plan: '套餐 / 额度', cred: 'AI 额度', draft: '实时草稿', chars: '字符' },
-        'zh-TW': { title: '# AGY Claude Style Token 監控報告', cid: '對話 ID', model: '模型', rem: '上下文剩餘', free: '可用', used: '已用', brk: '上下文構成', sys: '系統', tools: '工具', chat: '對話', tr: '工具結果', steps: '步', tot: '工作階段累計', calls: '次呼叫', inp: '輸入', cr: '快取讀取', hit: '命中率', out: '輸出', thk: '思考', rsp: '回覆', sub: '子代理', subSpawn: '個', spd: '生成速度', live: '即時 ~', latest: '最新 ', avg: '平均', peak: '峰值', ttft: '首字平均 TTFT', quota: '模型配額', q5h: '5小時', qwk: '本週', qrem: '剩餘', plan: '方案 / 點數', cred: 'AI 點數', draft: '即時草稿', chars: '字元' },
-        yue: { title: '# AGY Claude Style Token 監控報告', cid: '對話 ID', model: '模型', rem: '剩低上下文', free: '可用', used: '用咗', brk: '上下文組成', sys: '系統', tools: '工具', chat: '對話', tr: '工具結果', steps: '步', tot: '對話累計', calls: '次呼叫', inp: '輸入', cr: '快取讀取', hit: '命中率', out: '輸出', thk: '思考', rsp: '回覆', sub: '子代理', subSpawn: '個', spd: '生成速度', live: '即時 ~', latest: '最新 ', avg: '平均', peak: '峰值', ttft: '首字平均 TTFT', quota: '模型配額', q5h: '5個鐘', qwk: '今個禮拜', qrem: '剩低', plan: '方案 / 額度', cred: 'AI 額度', draft: '即時草稿', chars: '字' },
-        ja: { title: '# AGY Claude Style Token レポート', cid: '会話 ID', model: 'モデル', rem: '残りコンテキスト', free: '空き', used: '使用', brk: 'コンテキスト内訳', sys: 'システム', tools: 'ツール', chat: '会話', tr: 'ツール結果', steps: 'ステップ', tot: 'セッション合計', calls: '回呼出', inp: '入力', cr: 'キャッシュ読込', hit: '命中率', out: '出力', thk: '思考', rsp: '応答', sub: 'サブエージェント', subSpawn: '件', spd: '生成速度', live: '現在 ~', latest: '直近 ', avg: '平均', peak: '最大', ttft: '平均 TTFT', quota: 'モデルクォータ', q5h: '5時間', qwk: '週間', qrem: '残り', plan: 'プラン / クレジット', cred: 'AI クレジット', draft: '入力中下書き', chars: '文字' },
-      },
-      l,
-    );
-    const speedLine =
-      data.displaySpeed || data.avgSpeed
-        ? `- ${labels.spd}: ${data.isLiveSpeed ? labels.live : labels.latest}${data.displaySpeed || 0} tok/s | ${labels.avg} ${data.avgSpeed || 0} tok/s | ${labels.peak} ${data.sustainedPeakSpeed || 0} tok/s | ${labels.ttft} ${fmtSec(data.avgTtft || 0)}`
-        : null;
-    const quotaLine =
-      activeQuota && activeQuota.effectiveRemainingPct != null
-        ? `- ${labels.quota} (${activeQuota.groupName}): ${activeQuota.b5h && !activeQuota.b5h.disabled ? `${labels.q5h} ${fmtPct(activeQuota.b5h.remainingPct, 1)} | ` : ''}${activeQuota.bWeek ? `${labels.qwk} ${fmtPct(activeQuota.bWeek.remainingPct, 1)}` : `${labels.qrem} ${fmtPct(activeQuota.effectiveRemainingPct, 1)}`}`
-        : null;
-    const lines = [
-      labels.title,
-      `- ${labels.cid}: ${data.cascadeId || 'N/A'}`,
-      `- ${labels.model}: ${data.lastCall?.modelDisplayName || 'N/A'}${data.lastCall?.responseModel ? ` (${data.lastCall.responseModel})` : ''}`,
-      `- ${labels.rem}: ${fmtInt(remTok)} / ${fmtInt(maxTok)} tokens (${fmtPct(remPct)} ${labels.free}, ${fmtPct(data.contextPct)} ${labels.used})`,
-      `- ${labels.brk}: ${labels.sys} ${fmtInt(data.sysTokens)} | ${labels.tools} ${fmtInt(data.toolsTokens)} (${(data.toolsChildren || []).length}) | ${labels.chat} ${fmtInt(data.chatMsgTokens ?? data.msgTokens)} | ${labels.tr} ${fmtInt(data.toolResultsTokens || 0)} (${data.totalSteps} ${labels.steps})`,
-      `- ${labels.tot} (${data.totalCalls} ${labels.calls}): ${labels.inp} ${fmtInt(data.sumInput)} | ${labels.cr} ${fmtInt(data.sumCacheRead)} (${fmtPct(data.overallCacheHitPct)} ${labels.hit}) | ${labels.out} ${fmtInt(data.sumOutput)} (${labels.thk} ${fmtInt(data.sumThinking)}, ${labels.rsp} ${fmtInt(data.sumResponse)})`,
-      ...(data.subagentCount > 0
-        ? [`- ${labels.sub}: ${data.subagentCount}${labels.subSpawn} (${data.subagentCalls} ${labels.calls}, ${fmtInt(data.subagentTokens)} tokens)`]
-        : []),
-      ...(speedLine ? [speedLine] : []),
-      ...(quotaLine ? [quotaLine] : []),
-      ...(quotaData?.tierName ? [`- ${labels.plan}: ${quotaData.tierName} (${labels.cred}: ${fmtInt(quotaData.credits?.availableCredits || 0)})`] : []),
-      `- ${labels.draft}: ~${fmtInt(draftEst?.tokens || 0)} tokens (${fmtInt(draftEst?.chars || 0)} ${labels.chars})`,
-    ];
-    return lines.join('\n');
+    return { isRunning, isThinking, hasError };
   }
 
   return {
@@ -1504,25 +599,13 @@
     homeShortDateFormat,
     homeShortDate,
     isSubagentSummary,
+    normalizeModelDisplayName,
     analyzeTrajectoryForUsage,
     homeHeatGrid,
     aggregateUsageRollup,
     axisMax,
     homeChartTicks,
     createHomeModelColours,
-    durSec,
-    tsSec,
-    fmtK,
-    fmtInt,
-    fmtPct,
-    fmtSec,
-    fmtResetTime,
-    estimateTextTokens,
-    analyzeActiveConversation,
-    attachSubagentSummaries,
-    normalizeQuotaData,
-    getActiveQuotaInfo,
-    computeRingTelemetry,
-    buildTelemetryReport,
+    inspectTrajectoryActivity,
   };
 });

@@ -4,6 +4,8 @@ const path = require('path');
 const {
   PID_FILE,
   LOCK_FILE,
+  STATE_DIR: CDP_STATE_DIR,
+  CONFIG_FILE: CDP_CONFIG_FILE,
   SETTING_BINDING,
   readActivePorts,
   listPages,
@@ -20,7 +22,7 @@ const {
 
 const STATE_DIR = process.env.AGY_CLAUDE_STYLE_STATE_DIR
   ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
-  : __dirname;
+  : CDP_STATE_DIR || __dirname;
 const LOG_FILE = path.join(STATE_DIR, 'watch.log');
 
 function shortTitle(page) {
@@ -68,9 +70,7 @@ async function startWatchController(options = {}) {
 
   const resolvedStateDir = options.stateDir
     ? path.resolve(options.stateDir)
-    : process.env.AGY_CLAUDE_STYLE_STATE_DIR
-    ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
-    : __dirname;
+    : STATE_DIR;
   const pidFile = options.pidFile || path.join(resolvedStateDir, '.watch.pid');
   const lockFile = options.lockFile || path.join(resolvedStateDir, '.watch.lock.json');
   const resolvedLogFile = options.logFile !== undefined ? options.logFile : path.join(resolvedStateDir, 'watch.log');
@@ -114,6 +114,7 @@ async function startWatchController(options = {}) {
   let tickTimer = null;
   let reloadTimer = null;
   let fsWatcher = null;
+  let configWatcher = null;
   let watchdog = null;
   let detachErrorGuards = null;
 
@@ -235,6 +236,12 @@ async function startWatchController(options = {}) {
         } catch {}
         fsWatcher = null;
       }
+      if (configWatcher) {
+        try {
+          configWatcher.close();
+        } catch {}
+        configWatcher = null;
+      }
       if (watchdog) {
         watchdog.stop();
         watchdog = null;
@@ -323,38 +330,57 @@ async function startWatchController(options = {}) {
     }, delay);
   }
 
+  function triggerHotReload(filename) {
+    if (stopped) return;
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(async () => {
+      if (stopped) return;
+      try {
+        delete require.cache[require.resolve('./cdp')];
+        const freshCdp = require('./cdp');
+        expr = freshCdp.buildInjectExpression();
+      } catch (err) {
+        logger.log(`[!] 读取文件失败: ${err.message}`);
+        return;
+      }
+      let n = 0;
+      for (const entry of attached.values()) {
+        if (!entry || stopped) continue;
+        try {
+          await apply(entry);
+          n++;
+        } catch {}
+      }
+      if (!stopped) {
+        logger.log(`[↻] ${filename} 已变更，已热更新 ${n} 个窗口`);
+      }
+    }, 180);
+    if (typeof reloadTimer.unref === 'function') reloadTimer.unref();
+  }
+
   try {
     fsWatcher = fs.watch(__dirname, (_, filename) => {
       if (stopped || !filename) return;
       if (filename.startsWith('.')) return;
       if (!/\.(css|js|json)$/i.test(filename)) return;
       if (/^(?:package|plugin|mcp_config)\.json$/i.test(filename)) return;
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(async () => {
-        if (stopped) return;
-        try {
-          delete require.cache[require.resolve('./cdp')];
-          const freshCdp = require('./cdp');
-          expr = freshCdp.buildInjectExpression();
-        } catch (err) {
-          logger.log(`[!] 读取文件失败: ${err.message}`);
-          return;
-        }
-        let n = 0;
-        for (const entry of attached.values()) {
-          if (!entry || stopped) continue;
-          try {
-            await apply(entry);
-            n++;
-          } catch {}
-        }
-        if (!stopped) {
-          logger.log(`[↻] ${filename} 已变更，已热更新 ${n} 个窗口`);
-        }
-      }, 180);
-      if (typeof reloadTimer.unref === 'function') reloadTimer.unref();
+      triggerHotReload(filename);
     });
     if (typeof fsWatcher.unref === 'function') fsWatcher.unref();
+  } catch {}
+
+  try {
+    const configDir = path.dirname(CDP_CONFIG_FILE);
+    const configBase = path.basename(CDP_CONFIG_FILE).toLowerCase();
+    if (path.resolve(configDir) !== path.resolve(__dirname)) {
+      fs.mkdirSync(configDir, { recursive: true });
+      configWatcher = fs.watch(configDir, (_, filename) => {
+        if (stopped || !filename) return;
+        if (path.basename(filename).toLowerCase() !== configBase) return;
+        triggerHotReload(path.basename(CDP_CONFIG_FILE));
+      });
+      if (typeof configWatcher.unref === 'function') configWatcher.unref();
+    }
   } catch {}
 
   detachErrorGuards = logger.installProcessErrorGuards({

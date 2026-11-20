@@ -3,7 +3,7 @@
   "args": ["main.mjs"],
   "restart_policy": "always",
   "display_name": "Claude Style",
-  "description": "可视化调整 AGY Claude Style 配色、小螃蟹 Clawd、字符波纹海、思考滑块、5 语言与 Token HUD 设置。",
+  "description": "可视化调整 AGY Claude Style 配色、小螃蟹 Clawd、字符波纹海、思考滑块、首页看板与 5 语言设置。",
   "has_web_ui": true,
   "ui_config": {
     "display_name": "Claude Style",
