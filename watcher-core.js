@@ -134,6 +134,7 @@ async function startWatchController(options = {}) {
   );
 
   const attached = new Map();
+  const skippedTargets = new Map();
   const idleTracker = createIdleHostTracker({ maxIdleFailures, keepAlive });
   let expr = buildInjectExpression();
   let lastPort = null;
@@ -153,6 +154,7 @@ async function startWatchController(options = {}) {
       }
     }
     attached.clear();
+    skippedTargets.clear();
   }
 
   async function apply(entry) {
@@ -180,7 +182,6 @@ async function startWatchController(options = {}) {
       }
       const entry = { session, scriptId: null, page };
       attached.set(page.id, entry);
-      idleTracker.markAttached();
 
       session.onClose = () => {
         attached.delete(page.id);
@@ -202,6 +203,19 @@ async function startWatchController(options = {}) {
       await session.send('Runtime.enable');
       await session.send('Runtime.addBinding', { name: SETTING_BINDING });
       const res = await apply(entry);
+      if (res && res.status === 'skipped-non-host') {
+        if (entry.scriptId) {
+          await session
+            .send('Page.removeScriptToEvaluateOnNewDocument', { identifier: entry.scriptId })
+            .catch(() => {});
+        }
+        session.onClose = null;
+        session.close();
+        attached.delete(page.id);
+        skippedTargets.set(page.id, page.url || '');
+        return;
+      }
+      idleTracker.markAttached();
       logger.log(`[✓] 已注入 agy-claude-style: ${shortTitle(page)} (${res.status})`);
     } catch (err) {
       const entry = attached.get(page.id);
@@ -311,7 +325,16 @@ async function startWatchController(options = {}) {
         lastPort = port;
       }
 
-      await Promise.all(pages.filter((p) => !attached.has(p.id)).map(attach));
+      const activePageUrls = new Map(pages.map((p) => [p.id, p.url || '']));
+      for (const [id, prevUrl] of skippedTargets.entries()) {
+        if (!activePageUrls.has(id) || activePageUrls.get(id) !== prevUrl) {
+          skippedTargets.delete(id);
+        }
+      }
+
+      await Promise.all(
+        pages.filter((p) => !attached.has(p.id) && !skippedTargets.has(p.id)).map(attach)
+      );
 
       idleTracker.recordTick({
         reachable: true,

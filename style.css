@@ -1298,7 +1298,7 @@ html[data-ag-cs-style] [data-ag-cs-effort="extra"] { color: var(--ag-cs-effort-x
   visibility: hidden;
 }
 /* Tuck crab smoothly away when slash-command / mention popup opens directly above composer */
-[data-testid="agent-input-box"]:has([role="listbox"], [role="option"], [data-testid="slash-command-menu"]) .ag-cs-crab,
+[data-testid="agent-input-box"]:has([role="listbox"], [role="option"], [data-testid="slash-command-menu"], [data-testid="mention-menu-footer"]) .ag-cs-crab,
 .relative.w-full:has([role="listbox"], [role="option"]) ~ .surface-composer .ag-cs-crab,
 div.relative.w-full:has([role="listbox"], [role="option"]) .ag-cs-crab {
   opacity: 0 !important;

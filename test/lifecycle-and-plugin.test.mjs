@@ -1690,10 +1690,30 @@ test('cdp helpers resolve plugin data dir, sanitize removed keys, filter browser
     }),
     false
   );
+  assert.equal(
+    cdp.isAntigravityPageTarget({
+      type: 'page',
+      title: 'Plugin Sidecar',
+      url: 'plugin://abc123.host/',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/8',
+    }),
+    false
+  );
+  assert.equal(
+    cdp.isAntigravityPageTarget({
+      type: 'page',
+      title: 'Favicon',
+      url: 'agy-favicon://tok123/',
+      webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/page/9',
+    }),
+    false
+  );
 
   assert.equal(isLocalHostRequest(), true);
   assert.equal(isLocalHostRequest({ headers: { host: '127.0.0.1:5100', origin: 'http://127.0.0.1:5100' } }), true);
   assert.equal(isLocalHostRequest({ headers: { host: 'localhost:5100', origin: 'vscode-webview://abc123' } }), true);
+  assert.equal(isLocalHostRequest({ headers: { host: '127.0.0.1:5100', origin: 'plugin://abc123.host' } }), true);
+  assert.equal(isLocalHostRequest({ headers: { host: '127.0.0.1:5100', origin: 'plugin://evil/path' } }), false);
   assert.equal(isLocalHostRequest({ headers: { host: 'evil.com:5100' } }), false);
   assert.equal(isLocalHostRequest({ headers: { host: '127.0.0.1:5100', origin: 'http://127.0.0.1:9999' } }), false);
   assert.equal(isLocalHostRequest({ headers: { host: '127.0.0.1:5100', 'sec-fetch-site': 'cross-site' } }), false);

@@ -968,6 +968,39 @@
       .replace(/"/g, '&quot;');
   }
 
+  function stripEffortBadgeSuffix(text) {
+    return String(text || '').replace(/\s*[·•].*$/, '').trim();
+  }
+
+  function isIgnoredModelBadgeSpan(el) {
+    if (!el) return true;
+    if (el.classList?.contains('google-symbols') || el.classList?.contains('material-symbols-outlined')) return true;
+    if (el.getAttribute?.('aria-hidden') === 'true' || el.hasAttribute?.('data-icon')) return true;
+    if (typeof el.closest === 'function' && el.closest('[role="tooltip"], .react-tooltip')) return true;
+    return false;
+  }
+
+  function findModelEffortBadgeSpan(modelBtn, { preferTagged = true } = {}) {
+    if (!modelBtn) return null;
+    if (preferTagged) {
+      const tagged = modelBtn.querySelector('.ag-cs-effort-badge, [data-ag-cs-effort]');
+      if (tagged && !isIgnoredModelBadgeSpan(tagged)) return tagged;
+    }
+    const spans = Array.from(modelBtn.querySelectorAll('span')).filter((s) => !isIgnoredModelBadgeSpan(s));
+    const leafSpans = spans.filter((s) => s.childElementCount === 0);
+    const opacityLeaf = leafSpans.find((s) => s.classList?.contains('opacity-70'));
+    if (opacityLeaf) return opacityLeaf;
+    if (spans.length >= 2) {
+      const effortLeaf = leafSpans.find((s) =>
+        /\b(extra|xhigh|high|med(?:ium)?|low|max)\b/i.test(stripEffortBadgeSuffix(s.textContent))
+      );
+      if (effortLeaf) return effortLeaf;
+      const lastLeaf = leafSpans[leafSpans.length - 1];
+      if (lastLeaf) return lastLeaf;
+    }
+    return null;
+  }
+
   function getCurrentModelLabel(card) {
     const scope = card || document;
     const btn = scope.querySelector('[data-testid="model-selector-trigger"]');
@@ -977,7 +1010,11 @@
       if (jaMatch && jaMatch[1]) return jaMatch[1].trim();
       const m = aria.match(/(?:当前|目前|而家|现在|現在|Current)[：:]\s*(.+)$/i);
       if (m && m[1]) return m[1].trim();
-      const txt = (btn.textContent || '').replace(/\s+/g, ' ').trim();
+      const childText = Array.from(btn.children || [])
+        .filter((ch) => !isIgnoredModelBadgeSpan(ch))
+        .map((ch) => ch.textContent || '')
+        .join(' ');
+      const txt = (childText || btn.textContent || '').replace(/\s+/g, ' ').trim();
       if (txt) return txt;
     }
     return '';
@@ -1353,22 +1390,16 @@
   function resolveModelEffortContext(modelBtn, badgeEl) {
     const readLiveBadgeEffort = (el) => {
       if (!el) return '';
-      const rawTxt = (el.textContent || '').trim().toLowerCase();
+      const rawTxt = stripEffortBadgeSuffix(el.textContent).toLowerCase();
       const m = rawTxt.match(/\b(extra|xhigh|high|med(?:ium)?|low|max)\b/);
       if (m) return m[1].startsWith('med') ? 'medium' : m[1];
       return (el.getAttribute('data-ag-cs-effort') || rawTxt).trim().toLowerCase();
     };
     let badgeEffort = readLiveBadgeEffort(badgeEl);
     if (!badgeEffort && modelBtn) {
-      const foundBadge = modelBtn.querySelector('.ag-cs-effort-badge, [data-ag-cs-effort]');
+      const foundBadge = findModelEffortBadgeSpan(modelBtn, { preferTagged: true });
       if (foundBadge) {
         badgeEffort = readLiveBadgeEffort(foundBadge);
-      } else {
-        const spans = modelBtn.querySelectorAll('span');
-        const sub = spans.length >= 2 ? spans[spans.length - 1] : null;
-        if (sub && sub.childElementCount === 0) {
-          badgeEffort = readLiveBadgeEffort(sub);
-        }
       }
     }
     let fiberProps = null;
@@ -1400,18 +1431,14 @@
       const syncBadgeDom = () => {
         let targetBadge = badgeEl && badgeEl.isConnected ? badgeEl : null;
         if (!targetBadge && modelBtn) {
-          targetBadge = modelBtn.querySelector('.ag-cs-effort-badge, [data-ag-cs-effort]');
-          if (!targetBadge) {
-            const spans = modelBtn.querySelectorAll('span');
-            const sub = spans.length >= 2 ? spans[spans.length - 1] : null;
-            if (sub && sub.childElementCount === 0) targetBadge = sub;
-          }
+          targetBadge = findModelEffortBadgeSpan(modelBtn, { preferTagged: true });
         }
         let resolvedDisplay = effortDisplay;
         if (targetBadge) {
           if (!hasRealModelSetter) {
-            targetBadge.textContent = ' ' + effortDisplay;
-          } else if (effortId === 'xhigh' && /\bextra\b/i.test(targetBadge.textContent || '')) {
+            const ctxSuffix = (targetBadge.textContent || '').match(/(\s*[·•]\s*.+)$/)?.[1] || '';
+            targetBadge.textContent = ' ' + effortDisplay + ctxSuffix;
+          } else if (effortId === 'xhigh' && /\bextra\b/i.test(stripEffortBadgeSuffix(targetBadge.textContent))) {
             resolvedDisplay = 'Extra';
           }
           const badgeLevel = String(resolvedDisplay || '').trim().toLowerCase() === 'extra' ? 'extra' : effortId;
@@ -2673,10 +2700,15 @@
       // 2. Effort level accent badge inside [data-testid="model-selector-trigger"]
       const modelBtn = card.querySelector('[data-testid="model-selector-trigger"]');
       if (modelBtn) {
-        const spans = modelBtn.querySelectorAll('span');
-        const sub = spans.length >= 2 ? spans[spans.length - 1] : null;
+        const sub = findModelEffortBadgeSpan(modelBtn, { preferTagged: false });
+        for (const el of modelBtn.querySelectorAll('.ag-cs-effort-badge, [data-ag-cs-effort]')) {
+          if (el !== sub) {
+            el.removeAttribute('data-ag-cs-effort');
+            el.classList.remove('ag-cs-effort-badge');
+          }
+        }
         if (sub && sub.childElementCount === 0) {
-          const txt = (sub.textContent || '').trim().toLowerCase();
+          const txt = stripEffortBadgeSuffix(sub.textContent).toLowerCase();
           let level = '';
           if (/\bmax\b/.test(txt)) level = 'max';
           else if (/\bxhigh\b/.test(txt)) level = 'xhigh';

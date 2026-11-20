@@ -272,3 +272,41 @@ test('normalizeEffortStyle and Codex effort math stay consistent with dsh-codex-
   assert.equal(m.x, 1);
   assert.equal(m.v, 0);
 });
+
+test('stripContextWindowSuffix and parseModelLabelEffort handle AGY 2.33.1 thinking & context window suffixes', () => {
+  assert.equal(effortCore.stripContextWindowSuffix('Gemini 4 Neon (High) · 1M'), 'Gemini 4 Neon (High)');
+  assert.equal(effortCore.stripContextWindowSuffix('High · 200K'), 'High');
+  assert.equal(effortCore.stripContextWindowSuffix('Gemini 4 Argon (Low) · 1M context'), 'Gemini 4 Argon (Low)');
+  assert.equal(effortCore.stripContextWindowSuffix('Gemini 4 Argon (High)'), 'Gemini 4 Argon (High)');
+
+  assert.deepEqual(effortCore.parseModelLabelEffort('Gemini 4 Neon (High Thinking)'), {
+    base: 'Gemini 4 Neon',
+    effort: 'high',
+  });
+  assert.deepEqual(effortCore.parseModelLabelEffort('Gemini 4 Neon (XHigh Thinking) · 1M'), {
+    base: 'Gemini 4 Neon',
+    effort: 'xhigh',
+  });
+  assert.deepEqual(effortCore.parseModelLabelEffort('Gemini 4 Neon Extra · 200K'), {
+    base: 'Gemini 4 Neon',
+    effort: 'xhigh',
+  });
+  assert.deepEqual(effortCore.parseModelLabelEffort('Claude Sonnet 4.5 (Medium) · 1M'), {
+    base: 'Claude Sonnet 4.5',
+    effort: 'medium',
+  });
+
+  const options = [
+    { label: 'Gemini 4 Neon (Low Thinking)' },
+    { label: 'Gemini 4 Neon (Medium Thinking)' },
+    { label: 'Gemini 4 Neon (High Thinking)' },
+    { label: 'Gemini 4 Neon (XHigh Thinking)' },
+  ];
+  const resolved = effortCore.resolveClaudeEffortSteps(options, 'Gemini 4 Neon (High Thinking) · 1M', '');
+  assert.equal(resolved.baseName, 'Gemini 4 Neon');
+  assert.deepEqual(
+    resolved.steps.map((s) => s.id),
+    ['low', 'medium', 'high', 'xhigh']
+  );
+  assert.equal(resolved.selectedIdx, 2);
+});

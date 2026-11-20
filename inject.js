@@ -94,8 +94,12 @@ async function injectOnce({ log = console.log } = {}) {
     const session = await CdpSession.connect(page.webSocketDebuggerUrl);
     try {
       const res = await session.evaluate(expr);
-      log(`[✓] ${shortTitle(page)} (agy-claude-style ${res.version} · 状态: ${res.status})`);
-      injected.push({ title: shortTitle(page), version: res.version, status: res.status });
+      if (res && res.status === 'skipped-non-host') {
+        log(`[-] 跳过非 Antigravity 页面: ${shortTitle(page)}`);
+      } else {
+        log(`[✓] ${shortTitle(page)} (agy-claude-style ${res.version} · 状态: ${res.status})`);
+        injected.push({ title: shortTitle(page), version: res.version, status: res.status });
+      }
     } finally {
       session.close();
     }

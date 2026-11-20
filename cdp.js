@@ -212,7 +212,7 @@ function isAntigravityPageTarget(t) {
   const url = String(t.url || '').trim();
   const title = String(t.title || '').trim();
   if (!url) return false;
-  if (/^(?:devtools|chrome|chrome-extension|data|about|vscode-webview):/i.test(url)) return false;
+  if (/^(?:devtools|chrome|chrome-extension|data|about|vscode-webview|plugin|agy-favicon):/i.test(url)) return false;
   if (SIDECAR_TITLE_RE.test(title) || /\/sidecars?\//i.test(url)) return false;
   if (/sharedProcess\.html/i.test(url)) return false;
   if (type !== 'page') {
@@ -392,11 +392,51 @@ function buildInjectExpression(customConfig) {
       }
     };
 
+    const isHostDocument = () => {
+      const proto = typeof location !== 'undefined' && location?.protocol ? String(location.protocol).toLowerCase() : '';
+      if (!proto || (proto !== 'http:' && proto !== 'https:')) return true;
+      if (typeof window !== 'undefined' && (window.electronNative || window.nativeStorage || window.__APP_CONFIG__)) {
+        return true;
+      }
+      const href = typeof location !== 'undefined' && location?.href ? String(location.href) : '';
+      if (
+        /[?&]extension(?:View|Variant)=/i.test(href) ||
+        new RegExp('/c/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:[/?#]|$)', 'i').test(href)
+      ) {
+        return true;
+      }
+      if (typeof document === 'undefined') return false;
+      if (document.title === 'Jetski Web') return true;
+      if (
+        typeof document.querySelector === 'function' &&
+        document.querySelector(
+          'link[href="/jetbox.css"], link[href*="jetbox.css"], script[src="/prism_bundle.js"], script[src*="prism_bundle.js"], [data-testid="conversation-view"], [data-testid="agent-input-box"], [data-testid="home-greeting"], [data-testid="new-conversation-button"], [data-testid="sidebar-split"], .agy-home, body.theme-standalone, body[data-agy-theme]'
+        )
+      ) {
+        return true;
+      }
+      return false;
+    };
+
     let status = 'ok';
     let mounted = false;
+    let hostDeferred = false;
     const mount = () => {
       if (mounted || !document.documentElement) return;
+      if (!isHostDocument()) {
+        if (document.readyState === 'loading') {
+          status = 'deferred';
+          if (!hostDeferred) {
+            hostDeferred = true;
+            document.addEventListener('DOMContentLoaded', mount, { once: true });
+          }
+          return;
+        }
+        status = 'skipped-non-host';
+        return;
+      }
       mounted = true;
+      status = 'ok';
       try {
         if (document.head) applyStyle();
         else document.addEventListener('DOMContentLoaded', applyStyle, { once: true });

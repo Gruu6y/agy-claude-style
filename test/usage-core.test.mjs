@@ -302,3 +302,13 @@ test('normalizeModelDisplayName normalizes 2.33.0 raw slugs and merges cached al
   assert.equal(merged.models[0].calls, 2);
   assert.equal(merged.models[0].tokens, 240);
 });
+
+test('normalizeModelDisplayName normalizes AGY 2.33.1 flash-lite, flash-tts, maas, and claude-5.5 slugs', () => {
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-3.5-flash-lite'), 'Gemini 3.5 Flash Lite');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-3.1-flash-lite-high'), 'Gemini 3.1 Flash Lite (High)');
+  assert.equal(usageCore.normalizeModelDisplayName('gemini-3.1-flash-tts-preview'), 'Gemini 3.1 Flash TTS');
+  assert.equal(usageCore.normalizeModelDisplayName('gpt-oss-120b-maas'), 'GPT-OSS 120B');
+  assert.equal(usageCore.normalizeModelDisplayName('gpt-oss-20b-high-maas'), 'GPT-OSS 20B (High)');
+  assert.equal(usageCore.normalizeModelDisplayName('claude-opus-5-5'), 'Claude Opus 5.5');
+  assert.equal(usageCore.normalizeModelDisplayName('claude-opus-4-6-high-thinking'), 'Claude Opus 4.6 (High)');
+});
