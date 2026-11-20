@@ -298,20 +298,70 @@ function startHostWatchdog({
   };
 }
 
-function readWatcherPid(pidFile, lockFile) {
-  try {
-    const raw = fs.readFileSync(pidFile, 'utf8').trim();
-    const pid = parseInt(raw, 10);
-    if (Number.isInteger(pid) && pid > 0) return pid;
-  } catch {}
-  if (lockFile) {
+function readWatcherLockInfo(pidFile, lockFile) {
+  let pidFilePid = null;
+  if (pidFile) {
     try {
-      const data = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-      const pid = parseInt(data && data.pid, 10);
-      if (Number.isInteger(pid) && pid > 0) return pid;
+      const raw = fs.readFileSync(pidFile, 'utf8').trim();
+      const parsed = parseInt(raw, 10);
+      if (Number.isInteger(parsed) && parsed > 0) pidFilePid = parsed;
     } catch {}
   }
+
+  let lockData = null;
+  let lockPid = null;
+  if (lockFile) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        lockData = parsed;
+        const candidate = parseInt(parsed.pid, 10);
+        if (Number.isInteger(candidate) && candidate > 0) lockPid = candidate;
+      }
+    } catch {}
+  }
+
+  const defaultDir = pidFile ? path.dirname(pidFile) : lockFile ? path.dirname(lockFile) : null;
+  const buildFromLock = (source) => ({
+    pid: lockPid,
+    mode: typeof lockData.mode === 'string' && lockData.mode ? lockData.mode : null,
+    startedAt: typeof lockData.startedAt === 'string' && lockData.startedAt ? lockData.startedAt : null,
+    dir: typeof lockData.dir === 'string' && lockData.dir ? lockData.dir : defaultDir,
+    source,
+  });
+  const buildFromPid = (source) => {
+    const matchesLock = lockData && lockPid === pidFilePid;
+    return {
+      pid: pidFilePid,
+      mode: matchesLock && typeof lockData.mode === 'string' && lockData.mode ? lockData.mode : null,
+      startedAt:
+        matchesLock && typeof lockData.startedAt === 'string' && lockData.startedAt
+          ? lockData.startedAt
+          : null,
+      dir:
+        matchesLock && typeof lockData.dir === 'string' && lockData.dir ? lockData.dir : defaultDir,
+      source,
+    };
+  };
+
+  if (lockPid && isPidAlive(lockPid)) {
+    return buildFromLock('lock');
+  }
+  if (pidFilePid && isPidAlive(pidFilePid)) {
+    return buildFromPid('pid');
+  }
+  if (lockPid) {
+    return buildFromLock('lock-stale');
+  }
+  if (pidFilePid) {
+    return buildFromPid('pid-stale');
+  }
   return null;
+}
+
+function readWatcherPid(pidFile, lockFile) {
+  const info = readWatcherLockInfo(pidFile, lockFile);
+  return info ? info.pid : null;
 }
 
 async function waitForPidExit(pid, timeoutMs = 1200) {
@@ -323,36 +373,124 @@ async function waitForPidExit(pid, timeoutMs = 1200) {
   return !isPidAlive(pid);
 }
 
-async function acquireWatcherLock({ pidFile, lockFile, mode = 'watch', replaceExisting = false } = {}) {
-  const existingPid = readWatcherPid(pidFile, lockFile);
-  if (existingPid && existingPid !== process.pid && isPidAlive(existingPid)) {
-    if (!replaceExisting) {
-      return { acquired: false, existingPid };
-    }
-    try {
-      process.kill(existingPid);
-    } catch {}
-    await waitForPidExit(existingPid, 1200);
+async function acquireWatcherLock({
+  pidFile,
+  lockFile,
+  mode = 'watch',
+  replaceExisting = false,
+  preserveModes = [],
+} = {}) {
+  const preserveSet = new Set(Array.isArray(preserveModes) ? preserveModes.filter(Boolean) : []);
+  fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+  if (lockFile) {
+    fs.mkdirSync(path.dirname(lockFile), { recursive: true });
   }
 
-  fs.writeFileSync(pidFile, String(process.pid), 'utf8');
-  if (lockFile) {
+  let acquired = false;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const existing = readWatcherLockInfo(pidFile, lockFile);
+    if (existing && existing.pid !== process.pid && isPidAlive(existing.pid)) {
+      const preserved = Boolean(existing.mode && preserveSet.has(existing.mode));
+      if (!replaceExisting || preserved) {
+        return {
+          acquired: false,
+          existingPid: existing.pid,
+          existingMode: existing.mode || null,
+          preserved,
+        };
+      }
+      try {
+        process.kill(existing.pid);
+      } catch {}
+      await waitForPidExit(existing.pid, 1200);
+      if (isPidAlive(existing.pid)) {
+        return {
+          acquired: false,
+          existingPid: existing.pid,
+          existingMode: existing.mode || null,
+          preserved: false,
+        };
+      }
+    }
+
     try {
-      fs.writeFileSync(
-        lockFile,
-        JSON.stringify(
-          {
-            pid: process.pid,
-            mode,
-            dir: path.dirname(pidFile),
-            startedAt: new Date().toISOString(),
-          },
-          null,
-          2
-        ) + '\n',
-        'utf8'
-      );
+      const rawPid = fs.readFileSync(pidFile, 'utf8').trim();
+      const recordedPid = parseInt(rawPid, 10);
+      if (
+        !Number.isInteger(recordedPid) ||
+        recordedPid <= 0 ||
+        recordedPid === process.pid ||
+        !isPidAlive(recordedPid)
+      ) {
+        try {
+          fs.unlinkSync(pidFile);
+        } catch {}
+      }
     } catch {}
+
+    if (lockFile) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+        const metaPid = parseInt(meta && meta.pid, 10);
+        if (
+          !Number.isInteger(metaPid) ||
+          metaPid <= 0 ||
+          metaPid === process.pid ||
+          !isPidAlive(metaPid)
+        ) {
+          try {
+            fs.unlinkSync(lockFile);
+          } catch {}
+        }
+      } catch (err) {
+        if (!err || err.code !== 'ENOENT') {
+          try {
+            fs.unlinkSync(lockFile);
+          } catch {}
+        }
+      }
+    }
+
+    const lockPayload =
+      JSON.stringify(
+        {
+          pid: process.pid,
+          mode,
+          dir: path.dirname(pidFile),
+          startedAt: new Date().toISOString(),
+        },
+        null,
+        2
+      ) + '\n';
+
+    try {
+      if (lockFile) {
+        fs.writeFileSync(lockFile, lockPayload, { encoding: 'utf8', flag: 'wx' });
+        try {
+          fs.writeFileSync(pidFile, String(process.pid), 'utf8');
+        } catch {}
+      } else {
+        fs.writeFileSync(pidFile, String(process.pid), { encoding: 'utf8', flag: 'wx' });
+      }
+      acquired = true;
+      break;
+    } catch (err) {
+      if (err && (err.code === 'EEXIST' || err.code === 'EPERM' || err.code === 'EBUSY')) {
+        await new Promise((r) => setTimeout(r, 35));
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (!acquired) {
+    const existing = readWatcherLockInfo(pidFile, lockFile);
+    return {
+      acquired: false,
+      existingPid: existing && existing.pid ? existing.pid : null,
+      existingMode: existing && existing.mode ? existing.mode : null,
+      preserved: Boolean(existing && existing.mode && preserveSet.has(existing.mode)),
+    };
   }
 
   let released = false;
@@ -379,11 +517,139 @@ async function acquireWatcherLock({ pidFile, lockFile, mode = 'watch', replaceEx
   return {
     acquired: true,
     pid: process.pid,
+    mode,
     release: () => {
       process.off('exit', release);
       release();
     },
   };
+}
+
+function getMcpHostsDir(stateDir) {
+  return path.join(path.resolve(stateDir), '.mcp-hosts');
+}
+
+function registerMcpHost({
+  stateDir,
+  pid = process.pid,
+  lsAddress = '',
+  startedAt = new Date().toISOString(),
+} = {}) {
+  const hostsDir = getMcpHostsDir(stateDir);
+  fs.mkdirSync(hostsDir, { recursive: true });
+  const filePath = path.join(hostsDir, `${pid}.json`);
+  const payload =
+    JSON.stringify(
+      {
+        pid,
+        lsAddress: String(lsAddress || ''),
+        startedAt,
+      },
+      null,
+      2
+    ) + '\n';
+  fs.writeFileSync(filePath, payload, 'utf8');
+
+  let removed = false;
+  const unregister = () => {
+    if (removed) return;
+    removed = true;
+    process.off('exit', unregister);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {}
+  };
+
+  process.on('exit', unregister);
+  return {
+    filePath,
+    hostsDir,
+    pid,
+    unregister,
+  };
+}
+
+function listAliveMcpHosts({ stateDir, excludePid = 0, pruneStale = true } = {}) {
+  const hostsDir = getMcpHostsDir(stateDir);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(hostsDir);
+  } catch {
+    return [];
+  }
+
+  const alive = [];
+  for (const name of entries) {
+    if (!name.toLowerCase().endsWith('.json')) continue;
+    const fullPath = path.join(hostsDir, name);
+    let parsed = null;
+    try {
+      parsed = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+    } catch {}
+
+    let pid = parsed && typeof parsed === 'object' ? parseInt(parsed.pid, 10) : NaN;
+    if (!Number.isInteger(pid) || pid <= 0) {
+      const stem = name.slice(0, -5);
+      if (/^\d+$/.test(stem)) {
+        pid = parseInt(stem, 10);
+      }
+    }
+
+    if (!Number.isInteger(pid) || pid <= 0 || !isPidAlive(pid)) {
+      if (pruneStale) {
+        try {
+          fs.unlinkSync(fullPath);
+        } catch {}
+      }
+      continue;
+    }
+
+    if (excludePid && pid === excludePid) {
+      continue;
+    }
+
+    alive.push({
+      pid,
+      lsAddress: parsed && typeof parsed.lsAddress === 'string' ? parsed.lsAddress : '',
+      startedAt: parsed && typeof parsed.startedAt === 'string' ? parsed.startedAt : '',
+      filePath: fullPath,
+    });
+  }
+  return alive;
+}
+
+function readAntigravityPluginEnabledState({
+  pluginName = 'agy-claude-style',
+  pluginRoot = '',
+  homeDir = os.homedir(),
+  configPath = '',
+} = {}) {
+  const targetPath = configPath
+    ? path.resolve(configPath)
+    : path.join(homeDir, '.gemini', 'config', 'config.json');
+  let parsed = null;
+  try {
+    parsed = JSON.parse(fs.readFileSync(targetPath, 'utf8'));
+  } catch {
+    return 'unknown';
+  }
+  if (!parsed || typeof parsed !== 'object' || !parsed.plugins || typeof parsed.plugins !== 'object') {
+    return 'unknown';
+  }
+
+  const candidates = [];
+  const rootKey = pluginRoot ? path.basename(path.resolve(pluginRoot)) : '';
+  if (rootKey) candidates.push(rootKey);
+  if (pluginName && !candidates.includes(pluginName)) candidates.push(pluginName);
+
+  for (const key of candidates) {
+    if (!Object.prototype.hasOwnProperty.call(parsed.plugins, key)) continue;
+    const entry = parsed.plugins[key];
+    if (entry && typeof entry === 'object' && typeof entry.enabled === 'boolean') {
+      return entry.enabled === false ? 'disabled' : 'enabled';
+    }
+  }
+  return 'unknown';
 }
 
 function stripJsonc(rawText) {
@@ -1417,9 +1683,14 @@ module.exports = {
   createIdleHostTracker,
   normalizeLsHealthzUrl,
   startHostWatchdog,
+  readWatcherLockInfo,
   readWatcherPid,
   waitForPidExit,
   acquireWatcherLock,
+  getMcpHostsDir,
+  registerMcpHost,
+  listAliveMcpHosts,
+  readAntigravityPluginEnabledState,
   ensureIdeRemoteDebuggingArgv,
   REMOTE_DEBUG_LAUNCH_FLAG,
   ensureRemoteDebugFlagInArgs,

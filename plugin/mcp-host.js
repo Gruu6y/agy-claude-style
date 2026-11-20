@@ -4,19 +4,27 @@
 // - Detects both plugin disable (stdin close while LS is still alive -> live restore UI)
 //   and host shutdown (LS /healthz unreachable or parent exit -> immediate clean exit with zero orphans).
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { STATE_DIR: CDP_STATE_DIR } = require('../cdp');
 const {
   isBrokenPipeError,
+  isPidAlive,
   normalizeLsHealthzUrl,
   startHostWatchdog,
+  readWatcherLockInfo,
+  registerMcpHost,
+  listAliveMcpHosts,
+  readAntigravityPluginEnabledState,
   ensureIdeRemoteDebuggingArgv,
   ensureDesktopRemoteDebuggingLaunchers,
   exitProcessCleanly,
 } = require('../lifecycle');
 const { updateConfigSetting } = require('../inject');
-const { startWatchController } = require('../watcher-core');
+const { startWatchController, removeInjectedUiFromReachablePages } = require('../watcher-core');
 
-const PLUGIN_MANIFEST_PATH = path.resolve(__dirname, '..', 'plugin.json');
+const PLUGIN_ROOT = path.resolve(__dirname, '..');
+const PLUGIN_MANIFEST_PATH = path.join(PLUGIN_ROOT, 'plugin.json');
 
 const SUPPORTED_MCP_VERSIONS = new Set([
   '2025-11-25',
@@ -26,16 +34,41 @@ const SUPPORTED_MCP_VERSIONS = new Set([
 ]);
 const DEFAULT_MCP_VERSION = '2025-03-26';
 
-function readPluginVersion() {
+function readPluginManifest() {
   try {
     if (fs.existsSync(PLUGIN_MANIFEST_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_PATH, 'utf8'));
-      if (typeof parsed?.version === 'string' && parsed.version.trim()) {
-        return parsed.version.trim();
-      }
+      return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_PATH, 'utf8'));
     }
   } catch {}
+  return null;
+}
+
+function readPluginVersion() {
+  const parsed = readPluginManifest();
+  if (typeof parsed?.version === 'string' && parsed.version.trim()) {
+    return parsed.version.trim();
+  }
   return '1.0.0';
+}
+
+function readPluginName() {
+  const parsed = readPluginManifest();
+  if (typeof parsed?.name === 'string' && parsed.name.trim()) {
+    return parsed.name.trim();
+  }
+  return 'agy-claude-style';
+}
+
+function resolveHostPluginConfigPath({ env = process.env, homeDir = os.homedir() } = {}) {
+  const explicit = String(env?.AGY_CLAUDE_STYLE_ANTIGRAVITY_CONFIG || '').trim();
+  if (explicit) {
+    return path.resolve(explicit);
+  }
+  const customStateDir = String(env?.AGY_CLAUDE_STYLE_STATE_DIR || '').trim();
+  if (customStateDir) {
+    return null;
+  }
+  return path.join(homeDir, '.gemini', 'config', 'config.json');
 }
 
 function handleMcpJsonRpcMessage(msg, serverVersion = '1.0.0') {
@@ -99,9 +132,7 @@ function handleMcpJsonRpcMessage(msg, serverVersion = '1.0.0') {
 
 async function isHostStillAlive(reason, healthzUrl) {
   if (reason === 'ls-dead' || reason === 'parent-dead') return false;
-  if (!healthzUrl) {
-    return reason === 'stdin-end' || reason === 'stdin-close';
-  }
+  if (!healthzUrl) return false;
   try {
     await fetch(healthzUrl, { signal: AbortSignal.timeout(450) });
     return true;
@@ -110,36 +141,294 @@ async function isHostStillAlive(reason, healthzUrl) {
   }
 }
 
+async function shouldRemoveUiOnShutdown({
+  reason,
+  healthzUrl,
+  stateDir,
+  antigravityConfigPath,
+  pluginName,
+  pluginRoot = PLUGIN_ROOT,
+  isLeader = false,
+  excludePid = process.pid,
+  settleDelayMs = 120,
+} = {}) {
+  const readState = () =>
+    antigravityConfigPath
+      ? readAntigravityPluginEnabledState({
+          pluginName,
+          pluginRoot,
+          configPath: antigravityConfigPath,
+        })
+      : 'unknown';
+
+  const hasOtherPeers = () =>
+    Boolean(stateDir) && listAliveMcpHosts({ stateDir, excludePid, pruneStale: true }).length > 0;
+
+  let pluginState = readState();
+  if (pluginState === 'disabled') {
+    return Boolean(isLeader) || !hasOtherPeers();
+  }
+
+  if (!isLeader) {
+    return false;
+  }
+
+  if (reason === 'ls-dead' || reason === 'parent-dead') {
+    return false;
+  }
+
+  if (
+    settleDelayMs > 0 &&
+    (reason === 'stdin-end' || reason === 'stdin-close' || reason === 'signal:SIGTERM')
+  ) {
+    await new Promise((r) => setTimeout(r, settleDelayMs));
+    pluginState = readState();
+    if (pluginState === 'disabled') {
+      return true;
+    }
+  }
+
+  if (hasOtherPeers()) {
+    return false;
+  }
+
+  if (pluginState === 'enabled') {
+    return false;
+  }
+
+  return await isHostStillAlive(reason, healthzUrl);
+}
+
 function startMcpPluginHost() {
   const serverVersion = readPluginVersion();
+  const pluginName = readPluginName();
   const healthzUrl = normalizeLsHealthzUrl(process.env.ANTIGRAVITY_LS_ADDRESS);
+  const stateDir = process.env.AGY_CLAUDE_STYLE_STATE_DIR
+    ? path.resolve(process.env.AGY_CLAUDE_STYLE_STATE_DIR)
+    : CDP_STATE_DIR || PLUGIN_ROOT;
+  const pidFile = path.join(stateDir, '.watch.pid');
+  const lockFile = path.join(stateDir, '.watch.lock.json');
+  const logFile = path.join(stateDir, 'watch.log');
+  const antigravityConfigPath = resolveHostPluginConfigPath();
+  const standbyPollMs = Math.max(100, Number(process.env.AGY_CLAUDE_STYLE_STANDBY_POLL_MS) || 1500);
+  const settleDelayMs =
+    process.env.AGY_CLAUDE_STYLE_SHUTDOWN_SETTLE_MS !== undefined
+      ? Math.max(0, Number(process.env.AGY_CLAUDE_STYLE_SHUTDOWN_SETTLE_MS) || 0)
+      : 120;
+
   let shuttingDown = false;
+  let shutdownTookControl = false;
   let framingMode = 'line';
   let rawBuffer = Buffer.alloc(0);
 
+  function appendSafeLog(msg) {
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.appendFileSync(logFile, `[${new Date().toISOString()}] ${msg}\n`, 'utf8');
+    } catch {}
+  }
+
   try {
-    ensureIdeRemoteDebuggingArgv();
+    fs.mkdirSync(stateDir, { recursive: true });
   } catch {}
-  void ensureDesktopRemoteDebuggingLaunchers({ enabled: true }).catch(() => {});
+  const hostLease = registerMcpHost({
+    stateDir,
+    pid: process.pid,
+    lsAddress: process.env.ANTIGRAVITY_LS_ADDRESS || '',
+  });
 
   let controller = null;
-  const controllerPromise = startWatchController({
-    mode: 'mcp-plugin',
-    keepAlive: true,
-    watchHostExit: false,
-    watchStdin: false,
-    replaceExisting: true,
-    enableConsole: false,
-    lsAddress: '',
-    updateConfigSetting,
-  })
-    .then((ctrl) => {
-      controller = ctrl;
-      return ctrl;
-    })
-    .catch(() => null);
-
+  let provisionedLaunchers = false;
+  let reconcileInFlight = null;
+  let reconcileQueued = false;
+  let reconcileDebounceTimer = null;
+  let standbyTimer = null;
+  let stateDirWatcher = null;
+  let configWatcher = null;
   let watchdog = null;
+
+  async function runReconcileStep() {
+    if (shuttingDown) return;
+
+    const pluginState = antigravityConfigPath
+      ? readAntigravityPluginEnabledState({
+          pluginName,
+          pluginRoot: PLUGIN_ROOT,
+          configPath: antigravityConfigPath,
+        })
+      : 'unknown';
+
+    if (pluginState === 'disabled') {
+      if (controller && !controller.isStopped()) {
+        const ctrl = controller;
+        controller = null;
+        await ctrl.stop({ removeFromPages: true, exitCode: 0, reason: 'plugin-disabled' });
+      }
+      return;
+    }
+
+    if (controller && !controller.isStopped()) {
+      return;
+    }
+    controller = null;
+
+    const existing = readWatcherLockInfo(pidFile, lockFile);
+    if (
+      existing &&
+      existing.pid !== process.pid &&
+      isPidAlive(existing.pid) &&
+      existing.mode === 'mcp-plugin'
+    ) {
+      return;
+    }
+
+    if (!provisionedLaunchers) {
+      provisionedLaunchers = true;
+      try {
+        ensureIdeRemoteDebuggingArgv();
+      } catch {}
+      void ensureDesktopRemoteDebuggingLaunchers({ enabled: true }).catch(() => {});
+    }
+
+    try {
+      const ctrl = await startWatchController({
+        mode: 'mcp-plugin',
+        keepAlive: true,
+        watchHostExit: false,
+        watchStdin: false,
+        installWatchdog: false,
+        replaceExisting: true,
+        preserveModes: ['mcp-plugin'],
+        enableConsole: false,
+        lsAddress: '',
+        stateDir,
+        pidFile,
+        lockFile,
+        logFile,
+        updateConfigSetting,
+      });
+
+      if (shuttingDown) {
+        if (shutdownTookControl) {
+          await ctrl.stop({ removeFromPages: false, exitCode: 0, reason: 'late-shutdown' }).catch(() => {});
+        } else {
+          controller = ctrl;
+        }
+        return;
+      }
+
+      const postAcquireState = antigravityConfigPath
+        ? readAntigravityPluginEnabledState({
+            pluginName,
+            pluginRoot: PLUGIN_ROOT,
+            configPath: antigravityConfigPath,
+          })
+        : 'unknown';
+      if (postAcquireState === 'disabled') {
+        await ctrl.stop({ removeFromPages: true, exitCode: 0, reason: 'plugin-disabled' }).catch(() => {});
+        return;
+      }
+
+      controller = ctrl;
+      try {
+        listAliveMcpHosts({ stateDir, excludePid: process.pid, pruneStale: true });
+      } catch {}
+    } catch (err) {
+      if (err && err.code === 'WATCHER_LOCKED') {
+        return;
+      }
+      appendSafeLog(
+        `[!] MCP watcher 启动失败，将在 standby 周期重试: ${err && err.message ? err.message : String(err)}`
+      );
+    }
+  }
+
+  function triggerReconcile() {
+    if (shuttingDown) return reconcileInFlight || Promise.resolve();
+    if (reconcileInFlight) {
+      reconcileQueued = true;
+      return reconcileInFlight;
+    }
+    reconcileInFlight = (async () => {
+      do {
+        reconcileQueued = false;
+        if (shuttingDown) break;
+        await runReconcileStep();
+      } while (reconcileQueued && !shuttingDown);
+    })()
+      .catch((err) => {
+        appendSafeLog(`[!] MCP watcher 协调异常: ${err && err.message ? err.message : String(err)}`);
+      })
+      .finally(() => {
+        reconcileInFlight = null;
+        if (reconcileQueued && !shuttingDown) {
+          void triggerReconcile();
+        }
+      });
+    return reconcileInFlight;
+  }
+
+  function scheduleReconcile() {
+    if (shuttingDown) return;
+    clearTimeout(reconcileDebounceTimer);
+    reconcileDebounceTimer = setTimeout(() => {
+      reconcileDebounceTimer = null;
+      void triggerReconcile();
+    }, 60);
+    if (typeof reconcileDebounceTimer.unref === 'function') {
+      reconcileDebounceTimer.unref();
+    }
+  }
+
+  void triggerReconcile();
+
+  try {
+    if (fs.existsSync(stateDir)) {
+      stateDirWatcher = fs.watch(stateDir, (_, filename) => {
+        if (shuttingDown) return;
+        if (!filename) {
+          scheduleReconcile();
+          return;
+        }
+        const name = process.platform === 'win32' ? String(filename).toLowerCase() : String(filename);
+        if (name === '.watch.lock.json' || name === '.watch.pid') {
+          scheduleReconcile();
+        }
+      });
+      if (typeof stateDirWatcher.unref === 'function') stateDirWatcher.unref();
+    }
+  } catch {}
+
+  if (antigravityConfigPath) {
+    try {
+      const configDir = path.dirname(antigravityConfigPath);
+      const configBase = path.basename(antigravityConfigPath);
+      if (fs.existsSync(configDir)) {
+        configWatcher = fs.watch(configDir, (_, filename) => {
+          if (shuttingDown) return;
+          if (!filename) {
+            scheduleReconcile();
+            return;
+          }
+          const matches =
+            process.platform === 'win32'
+              ? String(filename).toLowerCase() === configBase.toLowerCase()
+              : String(filename) === configBase;
+          if (matches) {
+            scheduleReconcile();
+          }
+        });
+        if (typeof configWatcher.unref === 'function') configWatcher.unref();
+      }
+    } catch {}
+  }
+
+  standbyTimer = setInterval(() => {
+    void triggerReconcile();
+  }, standbyPollMs);
+  if (typeof standbyTimer.unref === 'function') {
+    standbyTimer.unref();
+  }
 
   async function shutdownHost(reason = 'shutdown') {
     if (shuttingDown) return;
@@ -148,20 +437,61 @@ function startMcpPluginHost() {
       watchdog.stop();
       watchdog = null;
     }
+    if (standbyTimer) {
+      clearInterval(standbyTimer);
+      standbyTimer = null;
+    }
+    if (reconcileDebounceTimer) {
+      clearTimeout(reconcileDebounceTimer);
+      reconcileDebounceTimer = null;
+    }
+    if (stateDirWatcher) {
+      try {
+        stateDirWatcher.close();
+      } catch {}
+      stateDirWatcher = null;
+    }
+    if (configWatcher) {
+      try {
+        configWatcher.close();
+      } catch {}
+      configWatcher = null;
+    }
+
+    hostLease.unregister();
 
     const forceTimer = setTimeout(() => {
       process.exit(0);
-    }, 1800);
+    }, 2200);
     if (typeof forceTimer.unref === 'function') forceTimer.unref();
 
     try {
-      const hostAlive = await isHostStillAlive(reason, healthzUrl);
-      const ctrl = controller || (await Promise.race([
-        controllerPromise,
-        new Promise((resolve) => setTimeout(() => resolve(null), 400)),
-      ]));
-      if (ctrl) {
-        await ctrl.stop({ removeFromPages: hostAlive, exitCode: 0, reason });
+      if (reconcileInFlight) {
+        await Promise.race([
+          reconcileInFlight.catch(() => {}),
+          new Promise((resolve) => setTimeout(resolve, 500)),
+        ]);
+      }
+      shutdownTookControl = true;
+      const isLeader = Boolean(controller && !controller.isStopped());
+      const shouldRemove = await shouldRemoveUiOnShutdown({
+        reason,
+        healthzUrl,
+        stateDir,
+        antigravityConfigPath,
+        pluginName,
+        pluginRoot: PLUGIN_ROOT,
+        isLeader,
+        excludePid: process.pid,
+        settleDelayMs,
+      });
+
+      if (controller) {
+        const ctrl = controller;
+        controller = null;
+        await ctrl.stop({ removeFromPages: shouldRemove, exitCode: 0, reason });
+      } else if (shouldRemove) {
+        await removeInjectedUiFromReachablePages({ timeoutMs: 1200 }).catch(() => {});
       }
     } catch {
       // Ignore shutdown errors
@@ -274,6 +604,10 @@ if (require.main === module) {
 
 module.exports = {
   readPluginVersion,
+  readPluginName,
+  resolveHostPluginConfigPath,
+  isHostStillAlive,
+  shouldRemoveUiOnShutdown,
   handleMcpJsonRpcMessage,
   startMcpPluginHost,
 };

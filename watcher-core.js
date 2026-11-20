@@ -50,6 +50,28 @@ async function resolveReachableTarget() {
   return fallbackReachable || { port: ports[0], pages: null };
 }
 
+async function removeInjectedUiFromReachablePages({ timeoutMs = 1200 } = {}) {
+  const run = async () => {
+    const target = await resolveReachableTarget();
+    if (!target.pages || target.pages.length === 0) return;
+    await Promise.allSettled(
+      target.pages.map(async (page) => {
+        const session = await CdpSession.connect(page.webSocketDebuggerUrl, 800);
+        try {
+          await session.evaluate(REMOVE_EXPRESSION);
+        } finally {
+          session.close();
+        }
+      })
+    );
+  };
+  const timeout = new Promise((resolve) => {
+    const t = setTimeout(resolve, Math.max(100, Number(timeoutMs) || 1200));
+    if (typeof t.unref === 'function') t.unref();
+  });
+  await Promise.race([run().catch(() => {}), timeout]);
+}
+
 async function startWatchController(options = {}) {
   const {
     mode = 'cli',
@@ -60,7 +82,9 @@ async function startWatchController(options = {}) {
     backoffIntervalMs = 10000,
     parentPid = 0,
     watchStdin = false,
+    installWatchdog = true,
     replaceExisting = false,
+    preserveModes = [],
     enableConsole = true,
     logFile = LOG_FILE,
     lsAddress = process.env.ANTIGRAVITY_LS_ADDRESS,
@@ -91,12 +115,15 @@ async function startWatchController(options = {}) {
     lockFile,
     mode,
     replaceExisting,
+    preserveModes,
   });
 
   if (!lock.acquired) {
     const err = new Error(`守护进程已在运行 (PID ${lock.existingPid})。如需重启请先运行 remove.bat`);
     err.code = 'WATCHER_LOCKED';
     err.existingPid = lock.existingPid;
+    err.existingMode = lock.existingMode || null;
+    err.preserved = Boolean(lock.preserved);
     logger.dispose();
     throw err;
   }
@@ -198,18 +225,7 @@ async function startWatchController(options = {}) {
         );
         return;
       }
-      const target = await resolveReachableTarget();
-      if (!target.pages || target.pages.length === 0) return;
-      await Promise.allSettled(
-        target.pages.map(async (page) => {
-          const session = await CdpSession.connect(page.webSocketDebuggerUrl, 800);
-          try {
-            await session.evaluate(REMOVE_EXPRESSION);
-          } finally {
-            session.close();
-          }
-        })
-      );
+      await removeInjectedUiFromReachablePages({ timeoutMs: 1200 });
     };
     const timeout = new Promise((resolve) => {
       const t = setTimeout(resolve, 1200);
@@ -308,9 +324,6 @@ async function startWatchController(options = {}) {
         await stop({ removeFromPages: false, exitCode: 0, reason: 'host-closed' });
         return;
       }
-      if (idleTracker.shouldBackoff()) {
-        lastPort = null;
-      }
     } finally {
       busy = false;
     }
@@ -389,17 +402,19 @@ async function startWatchController(options = {}) {
     },
   });
 
-  watchdog = startHostWatchdog({
-    lsAddress,
-    parentPid,
-    watchStdin,
-    onShutdown: (reason) => {
-      if (reason !== 'broken-pipe') {
-        logger.log(`[*] 收到退出信号 (${reason})，守护进程退出`);
-      }
-      void stop({ removeFromPages: false, exitCode: 0, reason });
-    },
-  });
+  if (installWatchdog) {
+    watchdog = startHostWatchdog({
+      lsAddress,
+      parentPid,
+      watchStdin,
+      onShutdown: (reason) => {
+        if (reason !== 'broken-pipe') {
+          logger.log(`[*] 收到退出信号 (${reason})，守护进程退出`);
+        }
+        void stop({ removeFromPages: false, exitCode: 0, reason });
+      },
+    });
+  }
 
   await tick();
   if (!stopped) {
@@ -419,5 +434,6 @@ module.exports = {
   LOG_FILE,
   shortTitle,
   resolveReachableTarget,
+  removeInjectedUiFromReachablePages,
   startWatchController,
 };

@@ -24,12 +24,15 @@ const cdp = require(path.join(ROOT_DIR, 'cdp.js'));
 const lifecycle = require(path.join(ROOT_DIR, 'lifecycle.js'));
 const { startWatchController } = require(path.join(ROOT_DIR, 'watcher-core.js'));
 const { updateConfigSetting } = require(path.join(ROOT_DIR, 'inject.js'));
+const mcpHost = require(path.join(ROOT_DIR, 'plugin', 'mcp-host.js'));
 
 function createMockCdpServer() {
   const receivedCalls = [];
   const sockets = new Set();
   let lastInjectedExpr = null;
   let lastRemovedExpr = null;
+  let injectCount = 0;
+  let removeCount = 0;
 
   function encodeWsTextFrame(str) {
     const payload = Buffer.from(str, 'utf8');
@@ -68,9 +71,11 @@ function createMockCdpServer() {
       const expr = msg.params && msg.params.expression ? msg.params.expression : '';
       if (expr.includes('delete globalThis.__agCsUiMain')) {
         lastRemovedExpr = expr;
+        removeCount += 1;
         result = { result: { type: 'object', value: { removed: 3 } } };
       } else {
         lastInjectedExpr = expr;
+        injectCount += 1;
         result = {
           result: {
             type: 'object',
@@ -196,6 +201,8 @@ function createMockCdpServer() {
     getActiveSocketCount: () => sockets.size,
     getLastInjectedExpr: () => lastInjectedExpr,
     getLastRemovedExpr: () => lastRemovedExpr,
+    getInjectCount: () => injectCount,
+    getRemoveCount: () => removeCount,
     async close() {
       for (const s of sockets) s.destroy();
       await new Promise((resolve) => server.close(resolve));
@@ -228,6 +235,112 @@ function waitForExit(child, timeoutMs = 8000) {
       resolve(code);
     });
   });
+}
+
+function createMockLsServer() {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/healthz') {
+      res.writeHead(200);
+      res.end('ok');
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return {
+    async start() {
+      await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+      return server.address().port;
+    },
+    async close() {
+      await new Promise((resolve) => server.close(() => resolve()));
+    },
+  };
+}
+
+function spawnMcpHost({
+  workDir,
+  cdpPort,
+  lsAddress = '',
+  antigravityConfigPath = '',
+  standbyPollMs = 120,
+  settleDelayMs = 0,
+  configPath = path.join(workDir, 'config.json'),
+}) {
+  const env = {
+    ...process.env,
+    AG_CDP_PORT: String(cdpPort),
+    ANTIGRAVITY_LS_ADDRESS: lsAddress,
+    AGY_CLAUDE_STYLE_STATE_DIR: workDir,
+    AGY_CLAUDE_STYLE_CONFIG: configPath,
+    AGY_CLAUDE_STYLE_SKIP_LAUNCHER_PROVISION: '1',
+    AGY_CLAUDE_STYLE_STANDBY_POLL_MS: String(standbyPollMs),
+    AGY_CLAUDE_STYLE_SHUTDOWN_SETTLE_MS: String(settleDelayMs),
+  };
+  delete env.AGY_CLAUDE_STYLE_PLUGIN_DATA;
+  if (antigravityConfigPath) {
+    env.AGY_CLAUDE_STYLE_ANTIGRAVITY_CONFIG = antigravityConfigPath;
+  } else {
+    delete env.AGY_CLAUDE_STYLE_ANTIGRAVITY_CONFIG;
+  }
+
+  const child = spawn(process.execPath, [path.join(ROOT_DIR, 'plugin', 'mcp-host.js')], {
+    cwd: ROOT_DIR,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  });
+
+  const responses = [];
+  let stdoutBuf = '';
+  let stderrBuf = '';
+  let nextId = 1;
+
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    stdoutBuf += chunk;
+    const lines = stdoutBuf.split(/\r?\n/);
+    stdoutBuf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      responses.push(JSON.parse(line));
+    }
+  });
+
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk) => {
+    stderrBuf += chunk;
+  });
+
+  return {
+    child,
+    pid: child.pid,
+    responses,
+    getStderr: () => stderrBuf,
+    sendRpc(obj) {
+      child.stdin.write(JSON.stringify(obj) + '\n');
+    },
+    async rpc(method, params = {}) {
+      const id = nextId++;
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      return await waitFor(() => responses.find((r) => r.id === id));
+    },
+    async handshake() {
+      const initResp = await this.rpc('initialize', {
+        protocolVersion: '2025-11-25',
+        clientInfo: { name: 'test', version: '1.0' },
+      });
+      const toolsResp = await this.rpc('tools/list');
+      return { initResp, toolsResp };
+    },
+    endStdin() {
+      child.stdin.end();
+    },
+    kill(signal) {
+      try {
+        if (child.exitCode === null) child.kill(signal);
+      } catch {}
+    },
+  };
 }
 
 test('Issue #3: inject.js --watch auto-exits cleanly after host CDP closes and cleans lock files', async () => {
@@ -448,6 +561,603 @@ test('Native plugin: mcp-host.js serves 0-tool MCP over stdio, injects via CDP, 
     await mockCdp.close().catch(() => {});
     await new Promise((resolve) => lsServer.close(() => resolve()));
     fs.rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+test('Unit: watcher lock preserves mcp-plugin, replaces cli, cleans stale locks, and prevents split-brain', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-lock-unit-'));
+  const pidFile = path.join(workDir, '.watch.pid');
+  const lockFile = path.join(workDir, '.watch.lock.json');
+  const sleepers = [];
+
+  try {
+    const sleeperA = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
+    sleepers.push(sleeperA);
+
+    fs.writeFileSync(pidFile, String(sleeperA.pid), 'utf8');
+    fs.writeFileSync(
+      lockFile,
+      JSON.stringify({ pid: sleeperA.pid, mode: 'mcp-plugin', startedAt: new Date().toISOString() }),
+      'utf8'
+    );
+
+    const preservedRes = await lifecycle.acquireWatcherLock({
+      pidFile,
+      lockFile,
+      mode: 'mcp-plugin',
+      replaceExisting: true,
+      preserveModes: ['mcp-plugin'],
+    });
+    assert.equal(preservedRes.acquired, false);
+    assert.equal(preservedRes.existingPid, sleeperA.pid);
+    assert.equal(preservedRes.existingMode, 'mcp-plugin');
+    assert.equal(preservedRes.preserved, true);
+    assert.equal(lifecycle.isPidAlive(sleeperA.pid), true);
+
+    const cliSleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
+    sleepers.push(cliSleeper);
+    fs.writeFileSync(pidFile, String(cliSleeper.pid), 'utf8');
+    fs.writeFileSync(
+      lockFile,
+      JSON.stringify({ pid: cliSleeper.pid, mode: 'cli', startedAt: new Date().toISOString() }),
+      'utf8'
+    );
+
+    const replacedRes = await lifecycle.acquireWatcherLock({
+      pidFile,
+      lockFile,
+      mode: 'mcp-plugin',
+      replaceExisting: true,
+      preserveModes: ['mcp-plugin'],
+    });
+    assert.equal(replacedRes.acquired, true);
+    assert.equal(replacedRes.pid, process.pid);
+    assert.equal(lifecycle.readWatcherPid(pidFile, lockFile), process.pid);
+    await waitFor(() => !lifecycle.isPidAlive(cliSleeper.pid), 3000, 50);
+    replacedRes.release();
+    assert.equal(fs.existsSync(pidFile), false);
+    assert.equal(fs.existsSync(lockFile), false);
+
+    // Dead stale lock files are cleaned automatically before acquiring
+    const deadPid = 9999999;
+    fs.writeFileSync(pidFile, String(deadPid), 'utf8');
+    fs.writeFileSync(
+      lockFile,
+      JSON.stringify({ pid: deadPid, mode: 'mcp-plugin', startedAt: '2020-01-01T00:00:00.000Z' }),
+      'utf8'
+    );
+    const staleClaim = await lifecycle.acquireWatcherLock({
+      pidFile,
+      lockFile,
+      mode: 'mcp-plugin',
+      replaceExisting: true,
+      preserveModes: ['mcp-plugin'],
+    });
+    assert.equal(staleClaim.acquired, true);
+    staleClaim.release();
+
+    // Concurrent acquireWatcherLock contention across OS processes allows strictly 1 winner
+    const contenderScript = `
+      const lifecycle = require(${JSON.stringify(path.join(ROOT_DIR, 'lifecycle.js'))});
+      (async () => {
+        const res = await lifecycle.acquireWatcherLock({
+          pidFile: process.argv[1],
+          lockFile: process.argv[2],
+          mode: 'mcp-plugin',
+          replaceExisting: true,
+          preserveModes: ['mcp-plugin'],
+        });
+        process.stdout.write(JSON.stringify({ pid: process.pid, acquired: Boolean(res.acquired) }) + '\\n');
+        setTimeout(() => {
+          if (res.release) res.release();
+          process.exit(0);
+        }, res.acquired ? 450 : 200);
+      })();
+    `;
+    const runContender = () =>
+      new Promise((resolve, reject) => {
+        const proc = spawn(process.execPath, ['-e', contenderScript, pidFile, lockFile], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        sleepers.push(proc);
+        let out = '';
+        let err = '';
+        proc.stdout.on('data', (d) => (out += d.toString()));
+        proc.stderr.on('data', (d) => (err += d.toString()));
+        proc.on('exit', (code) => {
+          try {
+            const parsed = JSON.parse(out.trim());
+            resolve({ code, ...parsed });
+          } catch (e) {
+            reject(new Error(`Contender failed (${code}): ${err || out || e.message}`));
+          }
+        });
+      });
+
+    const raceResults = await Promise.all([runContender(), runContender(), runContender()]);
+    assert.equal(raceResults.filter((r) => r.acquired).length, 1);
+  } finally {
+    for (const s of sleepers) {
+      try { if (s && s.exitCode === null) s.kill('SIGKILL'); } catch {}
+    }
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('Unit: host peer registry, plugin enabled-state reader, and empty healthz guard behave safely', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-host-reg-'));
+  const sleepers = [];
+
+  try {
+    const selfLease = lifecycle.registerMcpHost({
+      stateDir: workDir,
+      pid: process.pid,
+      lsAddress: '127.0.0.1:4242',
+    });
+    assert.equal(fs.existsSync(selfLease.filePath), true);
+
+    const peerSleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], { stdio: 'ignore' });
+    sleepers.push(peerSleeper);
+    const peerLease = lifecycle.registerMcpHost({
+      stateDir: workDir,
+      pid: peerSleeper.pid,
+      lsAddress: '127.0.0.1:5353',
+    });
+    const deadLeasePath = path.join(lifecycle.getMcpHostsDir(workDir), '9999999.json');
+    fs.writeFileSync(deadLeasePath, JSON.stringify({ pid: 9999999 }), 'utf8');
+
+    const aliveWithoutSelf = lifecycle.listAliveMcpHosts({
+      stateDir: workDir,
+      excludePid: process.pid,
+      pruneStale: true,
+    });
+    assert.equal(aliveWithoutSelf.length, 1);
+    assert.equal(aliveWithoutSelf[0].pid, peerSleeper.pid);
+    assert.equal(fs.existsSync(deadLeasePath), false);
+
+    selfLease.unregister();
+    assert.equal(fs.existsSync(selfLease.filePath), false);
+    peerLease.unregister();
+
+    const missingCfg = path.join(workDir, 'missing.json');
+    assert.equal(lifecycle.readAntigravityPluginEnabledState({ configPath: missingCfg }), 'unknown');
+
+    const badCfg = path.join(workDir, 'bad.json');
+    fs.writeFileSync(badCfg, '{broken json', 'utf8');
+    assert.equal(lifecycle.readAntigravityPluginEnabledState({ configPath: badCfg }), 'unknown');
+
+    const emptyPluginsCfg = path.join(workDir, 'empty.json');
+    fs.writeFileSync(emptyPluginsCfg, JSON.stringify({ plugins: {} }), 'utf8');
+    assert.equal(lifecycle.readAntigravityPluginEnabledState({ configPath: emptyPluginsCfg }), 'unknown');
+
+    const dirMatchCfg = path.join(workDir, 'dir-match.json');
+    fs.writeFileSync(
+      dirMatchCfg,
+      JSON.stringify({
+        plugins: {
+          'agy-claude-style': { enabled: true },
+          'custom-dir-name': { enabled: false },
+        },
+      }),
+      'utf8'
+    );
+    assert.equal(
+      lifecycle.readAntigravityPluginEnabledState({
+        pluginName: 'agy-claude-style',
+        pluginRoot: path.join(workDir, 'custom-dir-name'),
+        configPath: dirMatchCfg,
+      }),
+      'disabled'
+    );
+    assert.equal(
+      lifecycle.readAntigravityPluginEnabledState({
+        pluginName: 'agy-claude-style',
+        pluginRoot: path.join(workDir, 'other-dir'),
+        configPath: dirMatchCfg,
+      }),
+      'enabled'
+    );
+
+    assert.equal(await mcpHost.isHostStillAlive('stdin-end', null), false);
+    assert.equal(await mcpHost.isHostStillAlive('stdin-close', ''), false);
+  } finally {
+    for (const s of sleepers) {
+      try { if (s && s.exitCode === null) s.kill('SIGKILL'); } catch {}
+    }
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E A: Desktop leader + TUI standby coexist and TUI exit preserves Desktop watcher and UI', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-a-'));
+  const mockCdp = createMockCdpServer();
+  const desktopLs = createMockLsServer();
+  const tuiLs = createMockLsServer();
+  let hostDesktop = null;
+  let hostTui = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const desktopLsPort = await desktopLs.start();
+    const tuiLsPort = await tuiLs.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+
+    hostDesktop = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${desktopLsPort}`,
+    });
+    const hsA = await hostDesktop.handshake();
+    assert.equal(hsA.initResp.result.serverInfo.name, 'agy-claude-style-host');
+    assert.deepEqual(hsA.toolsResp.result.tools, []);
+    await waitFor(() => mockCdp.getInjectCount() >= 1);
+    assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), String(hostDesktop.pid));
+
+    hostTui = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${tuiLsPort}`,
+    });
+    const hsB = await hostTui.handshake();
+    assert.equal(hsB.initResp.result.serverInfo.name, 'agy-claude-style-host');
+    assert.deepEqual(hsB.toolsResp.result.tools, []);
+    await new Promise((r) => setTimeout(r, 200));
+
+    assert.equal(lifecycle.isPidAlive(hostDesktop.pid), true);
+    assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), String(hostDesktop.pid));
+    assert.equal(mockCdp.getActiveSocketCount(), 1);
+
+    // TUI exits while TUI LS is still momentarily reachable
+    hostTui.endStdin();
+    const tuiCode = await waitForExit(hostTui.child, 6000);
+    assert.equal(tuiCode, 0);
+    assert.equal(mockCdp.getRemoveCount(), 0);
+    assert.equal(lifecycle.isPidAlive(hostDesktop.pid), true);
+    assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), String(hostDesktop.pid));
+    assert.equal(mockCdp.getActiveSocketCount(), 1);
+  } finally {
+    hostTui?.kill('SIGKILL');
+    hostDesktop?.kill('SIGKILL');
+    await Promise.allSettled([
+      hostTui ? waitForExit(hostTui.child, 2000).catch(() => {}) : Promise.resolve(),
+      hostDesktop ? waitForExit(hostDesktop.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    await desktopLs.close().catch(() => {});
+    await tuiLs.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E B: TUI leader exits cleanly and Desktop standby promotes seamlessly with setting binding intact', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-b-'));
+  const mockCdp = createMockCdpServer();
+  const tuiLs = createMockLsServer();
+  const desktopLs = createMockLsServer();
+  let hostTui = null;
+  let hostDesktop = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const tuiLsPort = await tuiLs.start();
+    const desktopLsPort = await desktopLs.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+
+    hostTui = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${tuiLsPort}`,
+    });
+    await hostTui.handshake();
+    await waitFor(() => mockCdp.getInjectCount() >= 1);
+    assert.equal(fs.readFileSync(pidFile, 'utf8').trim(), String(hostTui.pid));
+
+    hostDesktop = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${desktopLsPort}`,
+      standbyPollMs: 120,
+    });
+    await hostDesktop.handshake();
+    await waitFor(() =>
+      lifecycle.listAliveMcpHosts({ stateDir: workDir, excludePid: 0, pruneStale: false }).length === 2
+    );
+
+    const injectsBeforeHandover = mockCdp.getInjectCount();
+    hostTui.endStdin();
+    const tuiCode = await waitForExit(hostTui.child, 6000);
+    assert.equal(tuiCode, 0);
+    assert.equal(mockCdp.getRemoveCount(), 0);
+
+    await waitFor(
+      () =>
+        fs.existsSync(pidFile) &&
+        fs.readFileSync(pidFile, 'utf8').trim() === String(hostDesktop.pid) &&
+        mockCdp.getActiveSocketCount() === 1 &&
+        mockCdp.getInjectCount() > injectsBeforeHandover,
+      6000,
+      50
+    );
+
+    mockCdp.emitBindingCalled(cdp.SETTING_BINDING, { key: 'palette', value: 'claude' });
+    const cfgPath = path.join(workDir, 'config.json');
+    await waitFor(
+      () => fs.existsSync(cfgPath) && JSON.parse(fs.readFileSync(cfgPath, 'utf8')).palette === 'claude',
+      4000,
+      50
+    );
+  } finally {
+    hostTui?.kill('SIGKILL');
+    hostDesktop?.kill('SIGKILL');
+    await Promise.allSettled([
+      hostTui ? waitForExit(hostTui.child, 2000).catch(() => {}) : Promise.resolve(),
+      hostDesktop ? waitForExit(hostDesktop.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    await tuiLs.close().catch(() => {});
+    await desktopLs.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E C: Leader SIGKILL crash triggers stale lock/lease cleanup and standby automatic promotion', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-c-'));
+  const mockCdp = createMockCdpServer();
+  let hostA = null;
+  let hostB = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+
+    hostA = spawnMcpHost({ workDir, cdpPort, standbyPollMs: 120 });
+    await hostA.handshake();
+    await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() === String(hostA.pid));
+
+    hostB = spawnMcpHost({ workDir, cdpPort, standbyPollMs: 120 });
+    await hostB.handshake();
+    const leaseA = path.join(lifecycle.getMcpHostsDir(workDir), `${hostA.pid}.json`);
+    await waitFor(() => fs.existsSync(leaseA));
+
+    const injectsBeforeCrash = mockCdp.getInjectCount();
+    hostA.kill('SIGKILL');
+    await waitForExit(hostA.child, 4000);
+
+    await waitFor(
+      () =>
+        fs.existsSync(pidFile) &&
+        fs.readFileSync(pidFile, 'utf8').trim() === String(hostB.pid) &&
+        !fs.existsSync(leaseA) &&
+        mockCdp.getInjectCount() > injectsBeforeCrash,
+      6000,
+      60
+    );
+    assert.equal(mockCdp.getActiveSocketCount(), 1);
+  } finally {
+    hostA?.kill('SIGKILL');
+    hostB?.kill('SIGKILL');
+    await Promise.allSettled([
+      hostA ? waitForExit(hostA.child, 2000).catch(() => {}) : Promise.resolve(),
+      hostB ? waitForExit(hostB.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E D: Simultaneous cold-start race produces single CDP leader and two live MCP hosts', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-d-'));
+  const mockCdp = createMockCdpServer();
+  let hostA = null;
+  let hostB = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+
+    hostA = spawnMcpHost({ workDir, cdpPort, standbyPollMs: 150 });
+    hostB = spawnMcpHost({ workDir, cdpPort, standbyPollMs: 150 });
+
+    const [hsA, hsB] = await Promise.all([hostA.handshake(), hostB.handshake()]);
+    assert.deepEqual(hsA.toolsResp.result.tools, []);
+    assert.deepEqual(hsB.toolsResp.result.tools, []);
+
+    await waitFor(() => mockCdp.getInjectCount() >= 1 && fs.existsSync(pidFile));
+    await new Promise((r) => setTimeout(r, 250));
+
+    const leaderPid = fs.readFileSync(pidFile, 'utf8').trim();
+    assert.ok(leaderPid === String(hostA.pid) || leaderPid === String(hostB.pid));
+    assert.equal(lifecycle.isPidAlive(hostA.pid), true);
+    assert.equal(lifecycle.isPidAlive(hostB.pid), true);
+    assert.equal(mockCdp.getActiveSocketCount(), 1);
+  } finally {
+    hostA?.kill('SIGKILL');
+    hostB?.kill('SIGKILL');
+    await Promise.allSettled([
+      hostA ? waitForExit(hostA.child, 2000).catch(() => {}) : Promise.resolve(),
+      hostB ? waitForExit(hostB.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E E: Single-host exit without plugin disable preserves UI (empty LS and enabled config)', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-e-'));
+  const mockCdp = createMockCdpServer();
+  const lsServer = createMockLsServer();
+  let host1 = null;
+  let host2 = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const lsPort = await lsServer.start();
+
+    // Subcase 1: Single host with empty ANTIGRAVITY_LS_ADDRESS (e.g. TUI)
+    host1 = spawnMcpHost({ workDir, cdpPort, lsAddress: '' });
+    await host1.handshake();
+    await waitFor(() => mockCdp.getInjectCount() >= 1);
+    host1.endStdin();
+    const code1 = await waitForExit(host1.child, 6000);
+    assert.equal(code1, 0);
+    assert.equal(mockCdp.getRemoveCount(), 0);
+
+    // Subcase 2: Single host with reachable LS + explicit plugins["agy-claude-style"].enabled: true
+    const antigravityCfg = path.join(workDir, 'antigravity-config.json');
+    fs.writeFileSync(
+      antigravityCfg,
+      JSON.stringify({ plugins: { 'agy-claude-style': { enabled: true } } }, null, 2),
+      'utf8'
+    );
+    host2 = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${lsPort}`,
+      antigravityConfigPath: antigravityCfg,
+    });
+    await host2.handshake();
+    await waitFor(() => mockCdp.getInjectCount() >= 2);
+    host2.endStdin();
+    const code2 = await waitForExit(host2.child, 6000);
+    assert.equal(code2, 0);
+    assert.equal(mockCdp.getRemoveCount(), 0);
+  } finally {
+    host1?.kill('SIGKILL');
+    host2?.kill('SIGKILL');
+    await Promise.allSettled([
+      host1 ? waitForExit(host1.child, 2000).catch(() => {}) : Promise.resolve(),
+      host2 ? waitForExit(host2.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    await lsServer.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E F: Plugin disable removes live UI despite concurrent TUI standby, and re-enable resumes cleanly', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-f-'));
+  const mockCdp = createMockCdpServer();
+  const lsA = createMockLsServer();
+  const lsB = createMockLsServer();
+  let hostA = null;
+  let hostB = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const lsAPort = await lsA.start();
+    const lsBPort = await lsB.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+    const antigravityCfg = path.join(workDir, 'antigravity-config.json');
+    const writeEnabled = (enabled) => {
+      fs.writeFileSync(
+        antigravityCfg,
+        JSON.stringify({ plugins: { 'agy-claude-style': { enabled } } }, null, 2),
+        'utf8'
+      );
+    };
+
+    writeEnabled(true);
+
+    hostA = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${lsAPort}`,
+      antigravityConfigPath: antigravityCfg,
+      standbyPollMs: 100,
+    });
+    await hostA.handshake();
+    await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() === String(hostA.pid));
+
+    hostB = spawnMcpHost({
+      workDir,
+      cdpPort,
+      lsAddress: `127.0.0.1:${lsBPort}`,
+      antigravityConfigPath: antigravityCfg,
+      standbyPollMs: 100,
+    });
+    await hostB.handshake();
+
+    // Disable plugin in config and close leader host A (simulating Settings toggle off)
+    writeEnabled(false);
+    hostA.endStdin();
+    const codeA = await waitForExit(hostA.child, 6000);
+    assert.equal(codeA, 0);
+    assert.ok(mockCdp.getRemoveCount() >= 1);
+
+    const injectCountWhileDisabled = mockCdp.getInjectCount();
+    await new Promise((r) => setTimeout(r, 400));
+    const pingB = await hostB.rpc('ping');
+    assert.deepEqual(pingB.result, {});
+    assert.equal(fs.existsSync(pidFile), false);
+    assert.equal(mockCdp.getInjectCount(), injectCountWhileDisabled);
+
+    // Re-enable plugin: standby host B promotes and re-injects automatically
+    writeEnabled(true);
+    await waitFor(
+      () =>
+        fs.existsSync(pidFile) &&
+        fs.readFileSync(pidFile, 'utf8').trim() === String(hostB.pid) &&
+        mockCdp.getInjectCount() > injectCountWhileDisabled,
+      6000,
+      60
+    );
+  } finally {
+    hostA?.kill('SIGKILL');
+    hostB?.kill('SIGKILL');
+    await Promise.allSettled([
+      hostA ? waitForExit(hostA.child, 2000).catch(() => {}) : Promise.resolve(),
+      hostB ? waitForExit(hostB.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    await lsA.close().catch(() => {});
+    await lsB.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
+  }
+});
+
+test('E2E G: Native mcp-host.js still replaces legacy CLI watcher seamlessly', async () => {
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-cs-e2e-g-'));
+  const mockCdp = createMockCdpServer();
+  let cliChild = null;
+  let mcpChild = null;
+
+  try {
+    const cdpPort = await mockCdp.start();
+    const pidFile = path.join(workDir, '.watch.pid');
+    const cliEnv = {
+      ...process.env,
+      AG_CDP_PORT: String(cdpPort),
+      AGY_CLAUDE_STYLE_STATE_DIR: workDir,
+      AGY_CLAUDE_STYLE_CONFIG: path.join(workDir, 'config.json'),
+      ANTIGRAVITY_LS_ADDRESS: '',
+    };
+    delete cliEnv.AGY_CLAUDE_STYLE_PLUGIN_DATA;
+
+    cliChild = spawn(process.execPath, [path.join(ROOT_DIR, 'inject.js'), '--watch'], {
+      cwd: ROOT_DIR,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: cliEnv,
+    });
+    await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() === String(cliChild.pid));
+
+    mcpChild = spawnMcpHost({ workDir, cdpPort });
+    await mcpChild.handshake();
+
+    await waitForExit(cliChild, 6000);
+    await waitFor(
+      () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8').trim() === String(mcpChild.pid),
+      6000,
+      50
+    );
+  } finally {
+    try { if (cliChild && cliChild.exitCode === null) cliChild.kill('SIGKILL'); } catch {}
+    mcpChild?.kill('SIGKILL');
+    await Promise.allSettled([
+      cliChild ? waitForExit(cliChild, 2000).catch(() => {}) : Promise.resolve(),
+      mcpChild ? waitForExit(mcpChild.child, 2000).catch(() => {}) : Promise.resolve(),
+    ]);
+    await mockCdp.close().catch(() => {});
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch {}
   }
 });
 
